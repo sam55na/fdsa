@@ -277,7 +277,7 @@ class DatabaseManager:
                     'pending_withdrawals', 'payment_requests', 'maintenance',
                     'loyalty_points', 'loyalty_points_history', 'loyalty_rewards',
                     'loyalty_redemptions', 'loyalty_settings',
-                    'compensation_requests', 'compensation_settings', 'first_deposit_tracking'
+                    'compensation_requests', 'compensation_settings', 'gift_transactions','first_deposit_tracking'
             ]
 
                 for table in tables_to_drop:
@@ -631,8 +631,8 @@ class DatabaseManager:
                     net_amount DECIMAL(15, 2) NOT NULL,
                     commission_rate DECIMAL(5, 4) NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-                """)
+                )
+            """)
                 
                 
                 # إدخال الجوائز الافتراضية
