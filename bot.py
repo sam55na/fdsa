@@ -2198,6 +2198,7 @@ def confirm_silent_reset(chat_id, message_id):
 
 def confirm_distribution(chat_id, message_id):
     """تأكيد التوزيع مع رسائل متتالية"""
+    # المرحلة الأولى: التأكيد الأساسي
     markup = types.InlineKeyboardMarkup()
     markup.row(
         types.InlineKeyboardButton("نعم، توزيع الآن", callback_data="force_distribute_confirm"),
@@ -2213,6 +2214,36 @@ def confirm_distribution(chat_id, message_id):
         "• إرسال إشعارات للمحيلين\n"
         "• إعادة تعيين المستحقات المعلقة\n\n"
         "<b>هذا الإجراء لا يمكن التراجع عنه</b>"
+    )
+    
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+def confirm_distribution_final(chat_id, message_id):
+    """التأكيد النهائي قبل التوزيع"""
+    pending_commissions = get_pending_commissions()
+    total_pending = sum(commission['total_pending'] for commission in pending_commissions)
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("✅ نعم، أتأكد وأوافق", callback_data="force_distribute_final"),
+        types.InlineKeyboardButton("❌ إلغاء", callback_data="referral_admin")
+    )
+    
+    text = (
+        "<b>🚨 التأكيد النهائي</b>\n\n"
+        "<b>هل أنت متأكد بنسبة 100%؟</b>\n"
+        "<b>سيتم توزيع:</b>\n"
+        f"• إجمالي المبلغ: <b>{total_pending:.2f}</b>\n"
+        f"• على <b>{len(pending_commissions)}</b> محيل\n"
+        "• بشكل فوري ولا رجعة فيه\n\n"
+        "<b>سيتم خصم هذا المبلغ من رصيد النظام وإضافته للمحيلين</b>\n\n"
+        "<b>اضغط 'نعم' فقط إذا كنت متأكدًا تمامًا</b>"
     )
     
     bot.edit_message_text(
@@ -3134,31 +3165,15 @@ def handle_callbacks(call):
                 show_referral_admin_panel(chat_id, message_id)
             else:
                 bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
+        elif call.data == "force_distribute":
+            if is_admin(chat_id):
+                confirm_distribution(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
+
         elif call.data == "force_distribute_confirm":
             if is_admin(chat_id):
-                markup = types.InlineKeyboardMarkup()
-                markup.row(
-                    types.InlineKeyboardButton("✅ نعم، أتأكد وأوافق", callback_data="force_distribute_final"),
-                    types.InlineKeyboardButton("❌ إلغاء", callback_data="referral_admin")
-        )
-        
-                text = (
-                    "<b>🚨 التأكيد النهائي</b>\n\n"
-                    "<b>هل أنت متأكد بنسبة 100%؟</b>\n"
-                    "<b>سيتم توزيع:</b>\n"
-                    "• جميع العمولات المعلقة\n"
-                    "• على جميع المحيلين\n"
-                    "• بشكل فوري ولا رجعة فيه\n\n"
-                    "<b>اضغط 'نعم' فقط إذا كنت متأكدًا تمامًا</b>"
-        )
-        
-                bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=markup
-        )
+                confirm_distribution_final(chat_id, message_id)
             else:
                 bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
 
