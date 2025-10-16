@@ -608,29 +608,32 @@ class DatabaseManager:
             
                 # جدول طلبات الدعم
                 cursor.execute("""
-                CREATE TABLE support_requests (
-                    request_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    username TEXT,
-                    message_text TEXT,
-                    photo_id TEXT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    admin_chat_id TEXT,
-                    admin_message_id TEXT
-)
+                    CREATE TABLE support_requests (
+                        request_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        username TEXT,
+                        message_text TEXT,
+                        photo_id TEXT,
+                        status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        admin_chat_id TEXT,
+                        admin_message_id TEXT
+                    )
                 """)
-                
+            
+            # ==================== نظام الإهداء ====================
+            
+            # جدول عمليات الإهداء - أنشئه في مكان واضح
                 cursor.execute("""
-                CREATE TABLE gift_transactions (
-                    gift_id TEXT PRIMARY KEY,
-                    from_user_id TEXT NOT NULL,
-                    to_user_id TEXT NOT NULL,
-                    amount DECIMAL(15, 2) NOT NULL,
-                    commission DECIMAL(15, 2) NOT NULL,
-                    net_amount DECIMAL(15, 2) NOT NULL,
-                    commission_rate DECIMAL(5, 4) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    CREATE TABLE gift_transactions (
+                        gift_id TEXT PRIMARY KEY,
+                        from_user_id TEXT NOT NULL,
+                        to_user_id TEXT NOT NULL,
+                        amount DECIMAL(15, 2) NOT NULL,
+                        commission DECIMAL(15, 2) NOT NULL,
+                        net_amount DECIMAL(15, 2) NOT NULL,
+                        commission_rate DECIMAL(5, 4) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
                 
