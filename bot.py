@@ -3903,7 +3903,11 @@ def handle_callbacks(call):
             else:
                 bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
         
-        
+        elif call.data == "confirm_gift":
+            handle_confirm_gift(call)
+
+        elif call.data == "cancel_gift":
+            handle_cancel_gift(call)
         
     except Exception as e:
         logger.error(f"❌ خطأ في المعالجة: {e}")
