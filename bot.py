@@ -1785,36 +1785,52 @@ def show_terms_and_conditions(chat_id, message_id=None):
 
 def load_gift_settings():
     """تحميل إعدادات نظام الإهداء"""
-    result = db_manager.execute_query('SELECT * FROM system_settings WHERE setting_key LIKE %s', ('gift_%',))
-    settings = {}
-    if result:
-        for row in result:
-            settings[row['setting_key']] = row['setting_value']
-    
-    # القيم الافتراضية
-    defaults = {
-        'gift_commission_rate': '0.1',  # 10%
-        'gift_enabled': 'true'
-    }
-    
-    for key, value in defaults.items():
-        if key not in settings:
-            settings[key] = value
-    
-    return settings
+    try:
+        result = db_manager.execute_query(
+            "SELECT * FROM system_settings WHERE setting_key LIKE %s", 
+            ('gift_%',)
+        )
+        settings = {}
+        if result:
+            for row in result:
+                settings[row['setting_key']] = row['setting_value']
+        
+        # القيم الافتراضية
+        defaults = {
+            'gift_commission_rate': '0.1',  # 10%
+            'gift_enabled': 'true'
+        }
+        
+        for key, value in defaults.items():
+            if key not in settings:
+                settings[key] = value
+                # حفظ القيم الافتراضية
+                save_gift_settings({key: value})
+        
+        return settings
+        
+    except Exception as e:
+        logger.error(f"❌ خطأ في تحميل إعدادات الإهداء: {str(e)}")
+        return {'gift_commission_rate': '0.1', 'gift_enabled': 'true'}
 
 def save_gift_settings(settings):
     """حفظ إعدادات نظام الإهداء"""
-    for key, value in settings.items():
-        success = db_manager.execute_query(
-            "INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s) "
-            "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, "
-            "updated_at = CURRENT_TIMESTAMP",
-            (key, str(value))
-        )
-        if not success:
-            return False
-    return True
+    try:
+        for key, value in settings.items():
+            success = db_manager.execute_query(
+                "INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, "
+                "updated_at = CURRENT_TIMESTAMP",
+                (key, str(value))
+            )
+            if not success:
+                logger.error(f"❌ فشل في حفظ إعداد الإهداء: {key}")
+                return False
+        logger.info("✅ تم حفظ إعدادات الإهداء بنجاح")
+        return True
+    except Exception as e:
+        logger.error(f"❌ خطأ في حفظ إعدادات الإهداء: {str(e)}")
+        return False
 
 def get_gift_commission_rate():
     """جلب نسبة عمولة الإهداء"""
@@ -1827,7 +1843,7 @@ def is_gift_enabled():
     return settings.get('gift_enabled', 'true') == 'true'
 
 def add_gift_transaction(from_user_id, to_user_id, amount, commission_rate):
-    """إضافة معاملة إهداء"""
+    """إضافة معاملة إهداء مع معالجة الأخطاء"""
     try:
         gift_id = str(int(time.time() * 1000))
         commission = amount * commission_rate
@@ -1839,9 +1855,15 @@ def add_gift_transaction(from_user_id, to_user_id, amount, commission_rate):
             (gift_id, str(from_user_id), str(to_user_id), amount, commission, net_amount, commission_rate)
         )
         
-        return gift_id if success else None
+        if success:
+            logger.info(f"✅ تم إضافة معاملة الإهداء: {gift_id}")
+            return gift_id
+        else:
+            logger.error(f"❌ فشل في إضافة معاملة الإهداء: {gift_id}")
+            return None
+            
     except Exception as e:
-        logger.error(f"خطأ في إضافة معاملة الإهداء: {str(e)}")
+        logger.error(f"❌ خطأ في إضافة معاملة الإهداء: {str(e)}")
         return None
 
 def get_user_gift_history(user_id, limit=10):
@@ -1854,12 +1876,16 @@ def get_user_gift_history(user_id, limit=10):
     return result if result else []
 
 def get_user_exists(user_id):
-    """التحقق من وجود المستخدم"""
-    result = db_manager.execute_query(
-        "SELECT 1 FROM accounts WHERE chat_id = %s",
-        (str(user_id),)
-    )
-    return bool(result and len(result) > 0)
+    """التحقق من وجود المستخدم في جدول المحافظ"""
+    try:
+        result = db_manager.execute_query(
+            "SELECT 1 FROM wallets WHERE chat_id = %s",
+            (str(user_id),)
+        )
+        return bool(result and len(result) > 0)
+    except Exception as e:
+        logger.error(f"❌ خطأ في التحقق من وجود المستخدم: {str(e)}")
+        return False
 
 
 def show_gift_section(chat_id, message_id):
@@ -7149,11 +7175,11 @@ def handle_confirm_gift(call):
     """معالجة تأكيد الإهداء"""
     chat_id = str(call.message.chat.id)
     
-    if chat_id not in user_data or 'gift_amount' not in user_data[chat_id]:
-        bot.answer_callback_query(call.id, "❌ بيانات العملية غير موجودة.", show_alert=True)
-        return
-    
     try:
+        if chat_id not in user_data or 'gift_amount' not in user_data[chat_id]:
+            bot.answer_callback_query(call.id, "❌ بيانات العملية غير موجودة.", show_alert=True)
+            return
+        
         amount = user_data[chat_id]['gift_amount']
         commission = user_data[chat_id]['commission']
         net_amount = user_data[chat_id]['net_amount']
@@ -7166,18 +7192,20 @@ def handle_confirm_gift(call):
             bot.answer_callback_query(call.id, "❌ رصيدك غير كافي.", show_alert=True)
             return
         
+        # بدء العملية
+        bot.answer_callback_query(call.id, "⏳ جاري معالجة العملية...")
+        
         # خصم المبلغ من المرسل
         new_sender_balance = update_wallet_balance(chat_id, -amount)
         
         # إضافة المبلغ للمستلم
-        recipient_old_balance = get_wallet_balance(recipient_id)
         new_recipient_balance = update_wallet_balance(recipient_id, net_amount)
         
         # تسجيل المعاملة
         gift_id = add_gift_transaction(chat_id, recipient_id, amount, commission_rate)
         
         if gift_id:
-            # إرسال إشعار للمرسل
+            # إشعار النجاح للمرسل
             sender_text = f"""✅ <b>تمت عملية الإهداء بنجاح</b>
 
 <b>المستلم:</b> <code>{recipient_id}</code>
@@ -7187,36 +7215,44 @@ def handle_confirm_gift(call):
 <b>رصيدك الجديد:</b> <b>{new_sender_balance:.2f}</b>
 <b>رقم العملية:</b> <code>{gift_id}</code>"""
             
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id,
-                                text=sender_text, parse_mode="HTML")
+            bot.edit_message_text(
+                chat_id=chat_id, 
+                message_id=call.message.message_id,
+                text=sender_text, 
+                parse_mode="HTML"
+            )
             
             # إرسال إشعار للمستلم
-            recipient_text = f"""🎁 <b>تهانينا! لقد تلقيت هدية</b>
+            try:
+                recipient_text = f"""🎁 <b>تهانينا! لقد تلقيت هدية</b>
 
 <b>المرسل:</b> <code>{chat_id}</code>
 <b>المبلغ المستلم:</b> <b>{net_amount:.2f}</b>
 <b>رصيدك الجديد:</b> <b>{new_recipient_balance:.2f}</b>
 <b>رقم العملية:</b> <code>{gift_id}</code>"""
-            
-            try:
+                
                 bot.send_message(recipient_id, recipient_text, parse_mode="HTML")
             except Exception as e:
-                logger.error(f"خطأ في إرسال إشعار للمستلم: {str(e)}")
+                logger.error(f"❌ خطأ في إرسال إشعار للمستلم: {str(e)}")
             
-            bot.answer_callback_query(call.id, "✅ تمت عملية الإهداء بنجاح")
         else:
             # استرجاع الرصيد في حالة الخطأ
             update_wallet_balance(chat_id, amount)
             update_wallet_balance(recipient_id, -net_amount)
-            bot.answer_callback_query(call.id, "❌ فشل في إتمام العملية.", show_alert=True)
+            raise Exception("فشل في تسجيل المعاملة")
         
         # تنظيف البيانات
-        if chat_id in user_data:
-            del user_data[chat_id]
-            
+        cleanup_gift_data(chat_id)
+        
     except Exception as e:
-        logger.error(f"خطأ في معالجة الإهداء: {str(e)}")
+        logger.error(f"❌ خطأ في معالجة الإهداء: {str(e)}")
         bot.answer_callback_query(call.id, "❌ حدث خطأ في المعالجة.", show_alert=True)
+        
+        # محاولة إعادة تعيين الواجهة
+        try:
+            show_gift_section(chat_id, None)
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_gift")
 def handle_cancel_gift(call):
