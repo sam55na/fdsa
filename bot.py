@@ -728,11 +728,13 @@ db_manager = DatabaseManager()
 def get_wallet_balance(chat_id):
     """جلب رصيد محفظة المستخدم"""
     result = db_manager.execute_query(
-        'SELECT balance FROM wallets WHERE chat_id = %s', 
+        'SELECT balance FROM wallets WHERE chat_id = %s',
         (str(chat_id),)
     )
     if result and len(result) > 0:
-        return float(result[0]['balance'])
+        balance = result[0]['balance']
+        # تحويل decimal إلى float
+        return float(balance) if balance is not None else 0.0
     
     # إذا لم يكن للمستخدم محفظة، إنشاء واحدة برصيد 0
     db_manager.execute_query(
@@ -745,24 +747,29 @@ def update_wallet_balance(chat_id, amount):
     """تحديث رصيد محفظة المستخدم"""
     try:
         current_balance = get_wallet_balance(chat_id)
-        new_balance = current_balance + amount
         
-        success = db_manager.execute_query('''
-            INSERT INTO wallets (chat_id, balance) 
-            VALUES (%s, %s) 
-            ON CONFLICT (chat_id) 
-            DO UPDATE SET balance = EXCLUDED.balance, updated_at = CURRENT_TIMESTAMP
-        ''', (str(chat_id), new_balance))
+        # تحويل جميع القيم إلى float لتجنب مشكلة decimal
+        current_balance_float = float(current_balance)
+        amount_float = float(amount)
+        new_balance = current_balance_float + amount_float
+        
+        success = db_manager.execute_query(
+            """INSERT INTO wallets (chat_id, balance) 
+               VALUES (%s, %s) 
+               ON CONFLICT (chat_id) 
+               DO UPDATE SET balance = EXCLUDED.balance, updated_at = CURRENT_TIMESTAMP""",
+            (str(chat_id), new_balance)
+        )
         
         if success:
-            logger.info(f"✅ تم تحديث رصيد المحفظة {chat_id}: {current_balance} -> {new_balance}")
+            logger.info(f"تم تحديث رصيد المحفظة {chat_id}: {current_balance} -> {new_balance} ✔")
             return new_balance
         else:
-            logger.error(f"❌ فشل في تحديث رصيد المحفظة {chat_id}")
+            logger.error(f"فشل في تحديث رصيد المحفظة {chat_id}: {current_balance} ✘")
             return current_balance
             
     except Exception as e:
-        logger.error(f"❌ خطأ في تحديث رصيد المحفظة: {str(e)}")
+        logger.error(f"خطأ في تحديث رصيد المحفظة: {str(e)} ✘")
         return get_wallet_balance(chat_id)
 
 def load_accounts():
