@@ -620,7 +620,21 @@ class DatabaseManager:
                     admin_message_id TEXT
 )
                 """)
-            
+                
+                cursor.execute("""
+                CREATE TABLE gift_transactions (
+                    gift_id TEXT PRIMARY KEY,
+                    from_user_id TEXT NOT NULL,
+                    to_user_id TEXT NOT NULL,
+                    amount DECIMAL(15, 2) NOT NULL,
+                    commission DECIMAL(15, 2) NOT NULL,
+                    net_amount DECIMAL(15, 2) NOT NULL,
+                    commission_rate DECIMAL(5, 4) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+                """)
+                
+                
                 # إدخال الجوائز الافتراضية
                 default_rewards = [
                     ('reward_1', '10$', 'رصيد 10 دولار', 250, 0),
@@ -1769,6 +1783,254 @@ def show_terms_and_conditions(chat_id, message_id=None):
             reply_markup=markup
         )
 
+def load_gift_settings():
+    """تحميل إعدادات نظام الإهداء"""
+    result = db_manager.execute_query('SELECT * FROM system_settings WHERE setting_key LIKE %s', ('gift_%',))
+    settings = {}
+    if result:
+        for row in result:
+            settings[row['setting_key']] = row['setting_value']
+    
+    # القيم الافتراضية
+    defaults = {
+        'gift_commission_rate': '0.1',  # 10%
+        'gift_enabled': 'true'
+    }
+    
+    for key, value in defaults.items():
+        if key not in settings:
+            settings[key] = value
+    
+    return settings
+
+def save_gift_settings(settings):
+    """حفظ إعدادات نظام الإهداء"""
+    for key, value in settings.items():
+        success = db_manager.execute_query(
+            "INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s) "
+            "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (key, str(value))
+        )
+        if not success:
+            return False
+    return True
+
+def get_gift_commission_rate():
+    """جلب نسبة عمولة الإهداء"""
+    settings = load_gift_settings()
+    return float(settings.get('gift_commission_rate', 0.1))
+
+def is_gift_enabled():
+    """التحقق من تفعيل نظام الإهداء"""
+    settings = load_gift_settings()
+    return settings.get('gift_enabled', 'true') == 'true'
+
+def add_gift_transaction(from_user_id, to_user_id, amount, commission_rate):
+    """إضافة معاملة إهداء"""
+    try:
+        gift_id = str(int(time.time() * 1000))
+        commission = amount * commission_rate
+        net_amount = amount - commission
+        
+        success = db_manager.execute_query(
+            "INSERT INTO gift_transactions (gift_id, from_user_id, to_user_id, amount, commission, net_amount, commission_rate) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (gift_id, str(from_user_id), str(to_user_id), amount, commission, net_amount, commission_rate)
+        )
+        
+        return gift_id if success else None
+    except Exception as e:
+        logger.error(f"خطأ في إضافة معاملة الإهداء: {str(e)}")
+        return None
+
+def get_user_gift_history(user_id, limit=10):
+    """جلب سجل الإهداء للمستخدم"""
+    result = db_manager.execute_query(
+        "SELECT * FROM gift_transactions WHERE from_user_id = %s OR to_user_id = %s "
+        "ORDER BY created_at DESC LIMIT %s",
+        (str(user_id), str(user_id), limit)
+    )
+    return result if result else []
+
+def get_user_exists(user_id):
+    """التحقق من وجود المستخدم"""
+    result = db_manager.execute_query(
+        "SELECT 1 FROM accounts WHERE chat_id = %s",
+        (str(user_id),)
+    )
+    return bool(result and len(result) > 0)
+
+
+def show_gift_section(chat_id, message_id):
+    """عرض قسم الإهداء"""
+    if not is_gift_enabled():
+        text = """<b>🎁 نظام الإهداء</b>
+
+<b>النظام معطل حالياً</b>
+
+سيتم إعلامك عند تفعيل النظام من قبل الإدارة."""
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        
+        try:
+            bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, 
+                                parse_mode="HTML", reply_markup=markup)
+        except:
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+        return
+    
+    commission_rate = get_gift_commission_rate() * 100
+    user_balance = get_wallet_balance(chat_id)
+    
+    text = f"""<b>🎁 نظام الإهداء</b>
+
+أهلا بك! يمكنك إرسال هدايا لأصدقائك في أي وقت لتقاسم المتعة والأرباح مع زملائك.
+
+<b>💼 رصيدك الحالي:</b> <code>{user_balance:.2f}</code>
+<b>💸 عمولة الإهداء:</b> <b>{commission_rate:.1f}%</b>
+<b>🆔 الآيدي الخاص بك:</b> <code>{chat_id}</code>
+
+<b>📝 كيف يعمل النظام:</b>
+• أدخل آيدي صديقك
+• أدخل المبلغ المراد إهدائه
+• سيتم خصم العمولة من المبلغ
+• سيصل المبلغ الصافي لصديقك"""
+
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🚀 بدء الإهداء", callback_data="start_gift"),
+        types.InlineKeyboardButton("📋 سجل الإهداء", callback_data="gift_history")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    
+    try:
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, 
+                            parse_mode="HTML", reply_markup=markup)
+    except:
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+def start_gift_process(chat_id):
+    """بدء عملية الإهداء"""
+    if not is_gift_enabled():
+        bot.send_message(chat_id, "❌ نظام الإهداء معطل حالياً.")
+        return
+    
+    user_data[chat_id] = {'state': 'gift_recipient_id'}
+    
+    text = """🎁 <b>بدء عملية الإهداء</b>
+
+الخطوة 1/2: أرسل الآيدي الخاص بصديقك
+
+<em>يجب أن يكون الآيدي مكون من أرقام فقط</em>"""
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_section"))
+    
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+
+def show_gift_admin_panel(chat_id, message_id):
+    """عرض لوحة إدارة نظام الإهداء"""
+    settings = load_gift_settings()
+    commission_rate = float(settings.get('gift_commission_rate', 0.1)) * 100
+    enabled = settings.get('gift_enabled', 'true') == 'true'
+    
+    # إحصائيات
+    total_gifts = db_manager.execute_query("SELECT COUNT(*) as count FROM gift_transactions")
+    total_amount = db_manager.execute_query("SELECT COALESCE(SUM(amount), 0) as total FROM gift_transactions")
+    total_commission = db_manager.execute_query("SELECT COALESCE(SUM(commission), 0) as total FROM gift_transactions")
+    
+    total_gifts_count = total_gifts[0]['count'] if total_gifts else 0
+    total_amount_value = total_amount[0]['total'] if total_amount else 0
+    total_commission_value = total_commission[0]['total'] if total_commission else 0
+    
+    text = f"""<b>⚙️ إدارة نظام الإهداء</b>
+
+<b>📊 الإحصائيات:</b>
+• إجمالي العمليات: <b>{total_gifts_count}</b>
+• إجمالي المبالغ: <b>{total_amount_value:.2f}</b>
+• إجمالي العمولة: <b>{total_commission_value:.2f}</b>
+
+<b>⚙️ الإعدادات الحالية:</b>
+• نسبة العمولة: <b>{commission_rate:.1f}%</b>
+• حالة النظام: <b>{'مفعل' if enabled else 'معطل'}</b>
+
+<b>🎛️ اختر الإجراء المطلوب:</b>"""
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("📊 تعديل العمولة", callback_data="edit_gift_commission"),
+        types.InlineKeyboardButton("🔄 تفعيل/تعطيل", callback_data="toggle_gift_system")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    
+    try:
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, 
+                            parse_mode="HTML", reply_markup=markup)
+    except:
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+def start_edit_gift_commission(chat_id):
+    """بدء تعديل نسبة عمولة الإهداء"""
+    user_data[chat_id] = {'state': 'edit_gift_commission'}
+    
+    text = """⚙️ <b>تعديل نسبة عمولة الإهداء</b>
+
+أرسل النسبة الجديدة (من 0 إلى 50)
+
+<em>مثال: 10 للنسبة 10%</em>"""
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_admin"))
+    
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'edit_gift_commission')
+def handle_edit_gift_commission(message):
+    """معالجة تعديل نسبة العمولة"""
+    chat_id = str(message.chat.id)
+    
+    try:
+        commission_percent = float(message.text.strip())
+        
+        if commission_percent < 0 or commission_percent > 50:
+            bot.send_message(chat_id, "❌ النسبة يجب أن تكون بين 0 و 50")
+            return
+        
+        commission_rate = commission_percent / 100
+        
+        settings = load_gift_settings()
+        settings['gift_commission_rate'] = str(commission_rate)
+        save_gift_settings(settings)
+        
+        bot.send_message(chat_id, f"✅ <b>تم تحديث نسبة العمولة إلى {commission_percent:.1f}%</b>", 
+                        parse_mode="HTML")
+        
+        # تنظيف البيانات
+        if chat_id in user_data:
+            del user_data[chat_id]
+        
+        # العودة للوحة الإدارة
+        show_gift_admin_panel(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
+def toggle_gift_system(chat_id, message_id):
+    """تبديل حالة نظام الإهداء"""
+    settings = load_gift_settings()
+    current_status = settings.get('gift_enabled', 'true')
+    new_status = 'false' if current_status == 'true' else 'true'
+    
+    settings['gift_enabled'] = new_status
+    save_gift_settings(settings)
+    
+    status_text = "مفعل" if new_status == 'true' else "معطل"
+    bot.answer_callback_query(chat_id, f"تم {status_text} نظام الإهداء")
+    show_gift_admin_panel(chat_id, message_id)
 
 
 # ===============================================================
@@ -2508,6 +2770,8 @@ class EnhancedKeyboard:
         
         markup.add(types.InlineKeyboardButton("🛡️ التعويض الخاص", callback_data="compensation_section"))
         
+        markup.add(types.InlineKeyboardButton("🎁 إهداء الرصيد", callback_data="gift_section"))
+        
         
         markup.add(types.InlineKeyboardButton("👥 نظام الإحالات", callback_data="referral_section"))
         markup.add(types.InlineKeyboardButton("🎖 نقاط الامتياز", callback_data="loyalty_section"))
@@ -2581,7 +2845,10 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton("🎖 إدارة النقاط", callback_data="loyalty_admin"),
             types.InlineKeyboardButton("🛡️ إدارة التعويض", callback_data="compensation_admin"))
         
-        
+        markup.row(
+            types.InlineKeyboardButton("🎁 إدارة الإهداء", callback_data="gift_admin"),
+            types.InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats")
+    )
         
         markup.add(types.
 InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
@@ -3607,6 +3874,36 @@ def handle_callbacks(call):
             cancel_support_message(call)
         elif call.data == "show_terms":
             show_terms_and_conditions(chat_id, message_id)
+        
+        elif call.data == "gift_section":
+            show_gift_section(chat_id, message_id)
+
+        elif call.data == "start_gift":
+            start_gift_process(chat_id)
+
+        elif call.data == "gift_history":
+            show_gift_history(chat_id, message_id)
+
+        # معالجات الإدارة
+        elif call.data == "gift_admin":
+            if is_admin(chat_id):
+                show_gift_admin_panel(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "edit_gift_commission":
+            if is_admin(chat_id):
+                start_edit_gift_commission(chat_id)
+            else:
+                bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "toggle_gift_system":
+            if is_admin(chat_id):
+                toggle_gift_system(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
+        
+        
         
     except Exception as e:
         logger.error(f"❌ خطأ في المعالجة: {e}")
@@ -6753,6 +7050,218 @@ def handle_support_photo_input(message):
     if chat_id in user_data and user_data[chat_id].get('state') == 'awaiting_support_message':
         handle_support_photo(message)
 
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'gift_recipient_id')
+def handle_gift_recipient_id(message):
+    """معالجة آيدي المستلم"""
+    chat_id = str(message.chat.id)
+    recipient_id = message.text.strip()
+    
+    # التحقق من أن الآيدي أرقام فقط
+    if not recipient_id.isdigit():
+        bot.send_message(chat_id, "❌ يجب أن يحتوي الآيدي على أرقام فقط.")
+        return
+    
+    # التحقق من طول الآيدي
+    if len(recipient_id) < 5:
+        bot.send_message(chat_id, "❌ الآيدي يجب أن يكون 5 أرقام على الأقل.")
+        return
+    
+    # منع الإهداء للنفس
+    if recipient_id == chat_id:
+        bot.send_message(chat_id, "❌ لا يمكنك إهداء الرصيد لنفسك.")
+        return
+    
+    # التحقق من وجود المستخدم
+    if not get_user_exists(recipient_id):
+        bot.send_message(chat_id, "❌ المستخدم غير موجود. يرجى التأكد من الآيدي.")
+        return
+    
+    user_data[chat_id]['recipient_id'] = recipient_id
+    user_data[chat_id]['state'] = 'gift_amount'
+    
+    text = """🎁 <b>بدء عملية الإهداء</b>
+
+الخطوة 2/2: أرسل المبلغ المراد إهدائه
+
+<em>سيتم خصم العمولة من هذا المبلغ</em>"""
+    
+    bot.send_message(chat_id, text, parse_mode="HTML")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'gift_amount')
+def handle_gift_amount(message):
+    """معالجة مبلغ الإهداء"""
+    chat_id = str(message.chat.id)
+    
+    try:
+        amount = float(message.text.strip())
+        
+        if amount <= 0:
+            bot.send_message(chat_id, "❌ المبلغ يجب أن يكون أكبر من الصفر.")
+            return
+        
+        # التحقق من الرصيد
+        user_balance = get_wallet_balance(chat_id)
+        if user_balance < amount:
+            bot.send_message(chat_id, f"❌ رصيدك غير كافي. رصيدك الحالي: {user_balance:.2f}")
+            return
+        
+        recipient_id = user_data[chat_id]['recipient_id']
+        commission_rate = get_gift_commission_rate()
+        commission = amount * commission_rate
+        net_amount = amount - commission
+        
+        # حفظ البيانات للمرحلة التالية
+        user_data[chat_id]['gift_amount'] = amount
+        user_data[chat_id]['commission'] = commission
+        user_data[chat_id]['net_amount'] = net_amount
+        
+        # عرض تأكيد العملية
+        text = f"""🎁 <b>تأكيد عملية الإهداء</b>
+
+<b>المستلم:</b> <code>{recipient_id}</code>
+<b>المبلغ المرسل:</b> <b>{amount:.2f}</b>
+<b>عمولة الإهداء ({commission_rate*100:.1f}%):</b> <b>{commission:.2f}</b>
+<b>المبلغ المستلم:</b> <b>{net_amount:.2f}</b>
+<b>رصيدك الحالي:</b> <b>{user_balance:.2f}</b>
+<b>رصيدك بعد الإهداء:</b> <b>{user_balance - amount:.2f}</b>
+
+هل تريد تأكيد عملية الإهداء؟"""
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("✅ نعم، تأكيد", callback_data="confirm_gift"),
+            types.InlineKeyboardButton("❌ إلغاء", callback_data="cancel_gift")
+        )
+        
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال مبلغ صحيح.")
+
+@bot.callback_query_handler(func=lambda call: call.data == "confirm_gift")
+def handle_confirm_gift(call):
+    """معالجة تأكيد الإهداء"""
+    chat_id = str(call.message.chat.id)
+    
+    if chat_id not in user_data or 'gift_amount' not in user_data[chat_id]:
+        bot.answer_callback_query(call.id, "❌ بيانات العملية غير موجودة.", show_alert=True)
+        return
+    
+    try:
+        amount = user_data[chat_id]['gift_amount']
+        commission = user_data[chat_id]['commission']
+        net_amount = user_data[chat_id]['net_amount']
+        recipient_id = user_data[chat_id]['recipient_id']
+        commission_rate = get_gift_commission_rate()
+        
+        # التحقق النهائي من الرصيد
+        user_balance = get_wallet_balance(chat_id)
+        if user_balance < amount:
+            bot.answer_callback_query(call.id, "❌ رصيدك غير كافي.", show_alert=True)
+            return
+        
+        # خصم المبلغ من المرسل
+        new_sender_balance = update_wallet_balance(chat_id, -amount)
+        
+        # إضافة المبلغ للمستلم
+        recipient_old_balance = get_wallet_balance(recipient_id)
+        new_recipient_balance = update_wallet_balance(recipient_id, net_amount)
+        
+        # تسجيل المعاملة
+        gift_id = add_gift_transaction(chat_id, recipient_id, amount, commission_rate)
+        
+        if gift_id:
+            # إرسال إشعار للمرسل
+            sender_text = f"""✅ <b>تمت عملية الإهداء بنجاح</b>
+
+<b>المستلم:</b> <code>{recipient_id}</code>
+<b>المبلغ المرسل:</b> <b>{amount:.2f}</b>
+<b>العمولة:</b> <b>{commission:.2f}</b>
+<b>المبلغ المستلم:</b> <b>{net_amount:.2f}</b>
+<b>رصيدك الجديد:</b> <b>{new_sender_balance:.2f}</b>
+<b>رقم العملية:</b> <code>{gift_id}</code>"""
+            
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id,
+                                text=sender_text, parse_mode="HTML")
+            
+            # إرسال إشعار للمستلم
+            recipient_text = f"""🎁 <b>تهانينا! لقد تلقيت هدية</b>
+
+<b>المرسل:</b> <code>{chat_id}</code>
+<b>المبلغ المستلم:</b> <b>{net_amount:.2f}</b>
+<b>رصيدك الجديد:</b> <b>{new_recipient_balance:.2f}</b>
+<b>رقم العملية:</b> <code>{gift_id}</code>"""
+            
+            try:
+                bot.send_message(recipient_id, recipient_text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"خطأ في إرسال إشعار للمستلم: {str(e)}")
+            
+            bot.answer_callback_query(call.id, "✅ تمت عملية الإهداء بنجاح")
+        else:
+            # استرجاع الرصيد في حالة الخطأ
+            update_wallet_balance(chat_id, amount)
+            update_wallet_balance(recipient_id, -net_amount)
+            bot.answer_callback_query(call.id, "❌ فشل في إتمام العملية.", show_alert=True)
+        
+        # تنظيف البيانات
+        if chat_id in user_data:
+            del user_data[chat_id]
+            
+    except Exception as e:
+        logger.error(f"خطأ في معالجة الإهداء: {str(e)}")
+        bot.answer_callback_query(call.id, "❌ حدث خطأ في المعالجة.", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_gift")
+def handle_cancel_gift(call):
+    """معالجة إلغاء الإهداء"""
+    chat_id = str(call.message.chat.id)
+    
+    # تنظيف البيانات
+    if chat_id in user_data:
+        del user_data[chat_id]
+    
+    bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id,
+                         text="❌ <b>تم إلغاء عملية الإهداء</b>", parse_mode="HTML")
+    bot.answer_callback_query(call.id, "تم الإلغاء")
+    
+    # العودة للقسم الرئيسي
+    show_gift_section(chat_id, None)
+
+def show_gift_history(chat_id, message_id):
+    """عرض سجل الإهداء"""
+    history = get_user_gift_history(chat_id)
+    
+    text = f"""<b>📋 سجل عمليات الإهداء</b>
+
+<b>آخر العمليات:</b>\n"""
+    
+    if history:
+        for i, transaction in enumerate(history, 1):
+            if transaction['from_user_id'] == chat_id:
+                direction = "➡️ أرسلت"
+                other_user = transaction['to_user_id']
+                amount = f"-{transaction['amount']:.2f}"
+            else:
+                direction = "⬅️ استلمت"
+                other_user = transaction['from_user_id']
+                amount = f"+{transaction['net_amount']:.2f}"
+            
+            date = transaction['created_at'].strftime("%Y-%m-%d %H:%M")
+            text += f"{i}. {direction} لـ {other_user[:8]}... {amount} - {date}\n"
+    else:
+        text += "لا توجد عمليات سابقة"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_section"))
+    
+    try:
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, 
+                            parse_mode="HTML", reply_markup=markup)
+    except:
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
 
 
 # ===============================================================
