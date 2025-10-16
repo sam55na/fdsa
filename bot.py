@@ -1952,7 +1952,7 @@ def distribute_commissions():
     """توزيع العمولات"""
     try:
         pending_commissions = get_pending_commissions()
-        distribution_report = "<b>📊 تقرير توزيع عمولات الإحالات</b>\n\n"
+        distribution_report = "<b>تقرير التوزيع</b>\n\n"
         
         total_distributed = 0
         for commission in pending_commissions:
@@ -1963,8 +1963,20 @@ def distribute_commissions():
             update_wallet_balance(referrer_id, amount)
             total_distributed += amount
             
+            # إرسال إشعار للمحيل
+            try:
+                bot.send_message(
+                    referrer_id,
+                    f"🎉 <b>مبروك! حصلت على عمولة إحالات</b>\n\n"
+                    f"💰 <b>المبلغ: {amount:.2f}</b>\n"
+                    f"🌐 <b>تم إضافة المبلغ إلى محفظتك بنجاح</b>",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"خطأ في إرسال إشعار للمحيل: {str(e)}")
+            
             # تسجيل في التقرير
-            distribution_report += f"• المستخدم {referrer_id}: {amount:.2f}\n"
+            distribution_report += f"المستخدم {referrer_id}: {amount:.2f}\n"
         
         # إعادة تعيين المستحقات
         reset_pending_commissions()
@@ -2151,6 +2163,7 @@ def show_referral_settings(chat_id, message_id):
 
 def distribute_commissions_handler(chat_id, message_id):
     """معالج توزيع العمولات"""
+    confirm_distribution(chat_id, message_id)
     report, total = distribute_commissions()
     if report:
         bot.send_message(chat_id, report, parse_mode="HTML")
@@ -2183,7 +2196,32 @@ def confirm_silent_reset(chat_id, message_id):
         reply_markup=markup
     )
 
-
+def confirm_distribution(chat_id, message_id):
+    """تأكيد التوزيع مع رسائل متتالية"""
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("نعم، توزيع الآن", callback_data="force_distribute_confirm"),
+        types.InlineKeyboardButton("لا، إلغاء", callback_data="referral_admin")
+    )
+    
+    text = (
+        "<b>⚠️ تأكيد توزيع العمولات</b>\n\n"
+        "<b>هل أنت متأكد من توزيع العمولات الآن؟</b>\n"
+        "<b>سيتم:</b>\n"
+        "• خصم المبالغ من رصيد النظام\n"
+        "• إضافة العمولات لمحافظ المحيلين\n"
+        "• إرسال إشعارات للمحيلين\n"
+        "• إعادة تعيين المستحقات المعلقة\n\n"
+        "<b>هذا الإجراء لا يمكن التراجع عنه</b>"
+    )
+    
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
 # =============================================================================
 # نظام التعويض الخاص
@@ -3096,7 +3134,44 @@ def handle_callbacks(call):
                 show_referral_admin_panel(chat_id, message_id)
             else:
                 bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
+        elif call.data == "force_distribute_confirm":
+            if is_admin(chat_id):
+                markup = types.InlineKeyboardMarkup()
+                markup.row(
+                    types.InlineKeyboardButton("✅ نعم، أتأكد وأوافق", callback_data="force_distribute_final"),
+                    types.InlineKeyboardButton("❌ إلغاء", callback_data="referral_admin")
+        )
+        
+                text = (
+                    "<b>🚨 التأكيد النهائي</b>\n\n"
+                    "<b>هل أنت متأكد بنسبة 100%؟</b>\n"
+                    "<b>سيتم توزيع:</b>\n"
+                    "• جميع العمولات المعلقة\n"
+                    "• على جميع المحيلين\n"
+                    "• بشكل فوري ولا رجعة فيه\n\n"
+                    "<b>اضغط 'نعم' فقط إذا كنت متأكدًا تمامًا</b>"
+        )
+        
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=markup
+        )
+            else:
+                bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
 
+        elif call.data == "force_distribute_final":
+            if is_admin(chat_id):
+                report, total = distribute_commissions()
+                if report:
+                    bot.send_message(chat_id, report, parse_mode="HTML")
+                    show_referral_admin_panel(chat_id, message_id)
+                else:
+                    bot.send_message(chat_id, "❌ فشل في توزيع العمولات")
+            else:
+                bot.answer_callback_query(call.id, text="ليس لديك صلاحية الدخول", show_alert=True)
         # معالجات إدارة طرق الدفع
         elif call.data == "manage_payment_methods":
             if is_admin(chat_id):
