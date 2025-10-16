@@ -2844,112 +2844,57 @@ def process_withdraw_from_account(task):
     chat_id = task['chat_id']
     amount = task['amount']
     player_id = task['player_id']
-
+    
     try:
-        # محاولة السحب مباشرة عبر الوسيط بدون التحقق من الرصيد مسبقاً
+        # محاولة السحب مباشرة عبر الوسيط
         success = withdraw_from_account_via_agent(player_id, amount)
-
+        
         if success:
             # إضافة المبلغ إلى المحفظة
             new_balance = update_wallet_balance(chat_id, amount)
-
-            # ✅ تسجيل معاملة السحب في قاعدة البيانات
+            
+            # تسجيل معاملة السحب
             transaction_data = {
                 'user_id': str(chat_id),
-                'type': 'withdraw',
+                'type': 'withdraw', 
                 'amount': amount,
                 'description': f'سحب من حساب 55BETS - Player ID: {player_id}'
             }
             add_transaction(transaction_data)
-
-            # ✅ إشعار الإدارة بعملية السحب الناجحة
-            try:
-                bot.send_message(
-                    ADMIN_CHAT_ID,
-                    f"""<b>✅ عملية سحب ناجحة</b>
-
-المستخدم: <code>{chat_id}</code>
-المبلغ: <b>{amount}</b>
-معرف اللاعب: <code>{player_id}</code>
-رصيد المحفظة الجديد: <b>{new_balance}</b>
-الوقت: {time.strftime("%Y-%m-%d %H:%M:%S")}""",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error(f"خطأ في إرسال إشعار السحب للإدارة: {str(e)}")
-
-            # معالجة عمولة الإحالات
+            
+            # ✅ معالجة عمولة الإحالات عند السحب (منطق صحيح)
             referrer_id = get_referrer(chat_id)
             if referrer_id:
                 try:
                     settings = load_referral_settings()
                     commission_rate = float(settings.get('commission_rate', 0.1))
                     commission_to_deduct = amount * commission_rate
-
-                    deduct_referral_earning(referrer_id, commission_to_deduct)
-                    log_referral_commission(referrer_id, chat_id, 'withdraw', amount, 0, commission_to_deduct)
-
-                    logger.info(f"خصم عمولة إحالة عند السحب: {commission_to_deduct}")
+                    
+                    # خصم العمولة من العمولات المعلقة
+                    success_deduction = deduct_referral_earning(referrer_id, commission_to_deduct)
+                    
+                    if success_deduction:
+                        # تسجيل في سجل العمولات
+                        log_referral_commission(referrer_id, chat_id, 'withdraw', amount, 0, commission_to_deduct)
+                        logger.info(f"تم خصم عمولة إحالة عند السحب: {commission_to_deduct}")
+                    else:
+                        logger.error(f"فشل في خصم عمولة الإحالة للمحيل: {referrer_id}")
+                        
                 except Exception as referral_error:
-                    logger.error(f"خطأ في تعديل العمولة: {str(referral_error)}")
-
+                    logger.error(f"خطأ في معالجة عمولة السحب: {str(referral_error)}")
+            
             # إرسال رسالة نجاح للمستخدم
-            bot.send_message(
-                chat_id,
-                f"""<b>✅ تم السحب من الحساب بنجاح</b>
-
-المبلغ المسحوب: <b>{amount}</b>
-رصيد محفظتك الحالي: <b>{new_balance}</b>""",
+            bot.send_message(chat_id, 
+                f"<b>تم السحب من الحساب بنجاح ✅</b>\n\n"
+                f"<b>المبلغ المسحوب:</b> {amount}\n"
+                f"<b>رصيد محفظتك الحالي:</b> {new_balance}",
                 parse_mode="HTML"
             )
-
-        else:
-            # إرسال رسالة فشل للمستخدم
-            bot.send_message(
-                chat_id,
-                """<b>❌ فشل في السحب من الحساب</b>
-
-السبب: رصيد حساب اللاعب غير كافي أو حدث خطأ في النظام
-الحل: تأكد من رصيد حسابك في المنصة وحاول مرة أخرى""",
-                parse_mode="HTML"
-            )
-
-            # ✅ إشعار الإدارة بفشل عملية السحب
-            try:
-                bot.send_message(
-                    ADMIN_CHAT_ID,
-                    f"""<b>❌ فشل في سحب من الحساب</b>
-
-المستخدم: <code>{chat_id}</code>
-المبلغ: {amount}
-معرف اللاعب: <code>{player_id}</code>
-السبب: فشل في API الوسيط أو رصيد غير كافي
-الوقت: {time.strftime("%Y-%m-%d %H:%M:%S")}""",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error(f"خطأ في إرسال إشعار فشل السحب للإدارة: {str(e)}")
-
+            
     except Exception as e:
         error_msg = f"حدث خطأ أثناء السحب: {str(e)}"
         logger.error(error_msg)
         bot.send_message(chat_id, error_msg)
-        
-        # ✅ إشعار الإدارة بالخطأ
-        try:
-            bot.send_message(
-                ADMIN_CHAT_ID,
-                f"""<b>❌ خطأ في عملية السحب</b>
-
-المستخدم: <code>{chat_id}</code>
-المبلغ: {amount}
-معرف اللاعب: <code>{player_id}</code>
-الخطأ: {str(e)}
-الوقت: {time.strftime("%Y-%m-%d %H:%M:%S")}""",
-                parse_mode="HTML"
-            )
-        except Exception as admin_error:
-            logger.error(f"خطأ في إرسال إشعار الخطأ للإدارة: {str(admin_error)}")
 
 
 
@@ -2957,10 +2902,13 @@ def deduct_referral_earning(referrer_id, amount):
     """خصم من العمولات المعلقة"""
     try:
         amount_float = float(amount)
+        
+        # ✅ السماح بالعمولة السالبة (دين على المحيل)
         return db_manager.execute_query(
-            "UPDATE referral_earnings SET pending_commission = pending_commission - %s WHERE referrer_id = %s AND pending_commission >= %s",
-            (amount_float, str(referrer_id), amount_float)
+            "UPDATE referral_earnings SET pending_commission = pending_commission - %s WHERE referrer_id = %s",
+            (amount_float, str(referrer_id))
         )
+        
     except Exception as e:
         logger.error(f"خطأ في deduct_referral_earning: {str(e)}")
         return False
