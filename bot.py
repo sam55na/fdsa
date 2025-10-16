@@ -632,32 +632,28 @@ class DatabaseManager:
 )
                 """)
                 
-                # في قسم إنشاء الجداول، أضف ما يلي:
-
                 # جدول أكواد الهدايا
                 cursor.execute("""
                 CREATE TABLE gift_codes (
-                    code_id TEXT PRIMARY KEY,
-                    code TEXT NOT NULL UNIQUE,
+                    code TEXT PRIMARY KEY,
                     amount DECIMAL(15, 2) NOT NULL,
                     max_uses INTEGER NOT NULL,
                     used_count INTEGER DEFAULT 0,
-                    expires_at TIMESTAMP NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP,
                     active BOOLEAN DEFAULT TRUE
 )
-                """)
+""")
 
                 # جدول استخدامات أكواد الهدايا
                 cursor.execute("""
-                CREATE TABLE gift_code_redemptions (
-                    redemption_id TEXT PRIMARY KEY,
-                    code_id TEXT NOT NULL,
+                CREATE TABLE gift_code_usage (
+                    usage_id SERIAL PRIMARY KEY,
+                    code TEXT NOT NULL,
                     user_id TEXT NOT NULL,
-                    amount DECIMAL(15, 2) NOT NULL,
-                    redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(code_id, user_id)
+                    used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    amount_received DECIMAL(15, 2) NOT NULL
 )
 """)
                 
@@ -2602,391 +2598,225 @@ def toggle_gift_system(chat_id, message_id):
     else:
         bot.answer_callback_query(chat_id, "فشل في تحديث الإعدادات", show_alert=True)
 
-
-def create_gift_code(amount, max_uses, hours_valid, created_by):
-    """إنشاء كود هدية جديد"""
+def can_user_use_gift_code_today(user_id):
+    """التحقق إذا كان المستخدم يمكنه استخدام أي كود هدية اليوم"""
     try:
-        code_id = f"giftcode_{int(time.time() * 1000)}"
-        code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=8))
-        expires_at = datetime.now() + timedelta(hours=hours_valid)
-        
-        success = db_manager.execute_query(
-            """INSERT INTO gift_codes (code_id, code, amount, max_uses, expires_at, created_by)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (code_id, code, amount, max_uses, expires_at, str(created_by))
-        )
-        return code if success else None
-    except Exception as e:
-        logger.error(f"خطأ في إنشاء كود الهدية: {str(e)}")
-        return None
-
-def redeem_gift_code(code, user_id):
-    """استخدام كود الهدية"""
-    try:
-        # التحقق من أن المستخدم لم يستخدم أي كود في آخر 24 ساعة
-        recent_redemption = db_manager.execute_query(
-            """SELECT 1 FROM gift_code_redemptions 
-               WHERE user_id = %s AND redeemed_at >= NOW() - INTERVAL '24 hours'""",
+        result = db_manager.execute_query(
+            """SELECT 1 FROM gift_code_usage 
+               WHERE user_id = %s AND used_at >= NOW() - INTERVAL '24 hours'""",
             (str(user_id),)
         )
+        return not (result and len(result) > 0)
+    except Exception as e:
+        logger.error(f"خطأ في التحقق من استخدام الكود اليوم: {str(e)}")
+        return False
+
+def use_gift_code(code, user_id):
+    """استخدام كود هدية"""
+    try:
+        # التحقق إذا استخدم المستخدم أي كود خلال 24 ساعة
+        if not can_user_use_gift_code_today(user_id):
+            return False, "⚠️ يمكنك استخدام كود هدية واحدة فقط كل 24 ساعة"
         
-        if recent_redemption and len(recent_redemption) > 0:
-            return False, "يمكنك استخدام كود هدية واحدة فقط كل 24 ساعة"
+        # التحقق من أن المستخدم لم يستخدم هذا الكود من قبل
+        existing_usage = db_manager.execute_query(
+            "SELECT 1 FROM gift_code_usage WHERE code = %s AND user_id = %s",
+            (code.upper(), str(user_id))
+        )
         
-        # جلب بيانات الكود
+        if existing_usage and len(existing_usage) > 0:
+            return False, "❌ لقد استخدمت هذا الكود من قبل"
+        
+        # التحقق من صلاحية الكود
         code_data = db_manager.execute_query(
-            """SELECT code_id, amount, max_uses, used_count, expires_at, active 
+            """SELECT code, amount, max_uses, used_count, expires_at, active 
                FROM gift_codes WHERE code = %s""",
-            (code,)
+            (code.upper(),)
         )
         
         if not code_data or len(code_data) == 0:
-            return False, "كود الهدية غير صحيح"
+            return False, "❌ الكود غير صحيح"
         
         code_info = code_data[0]
         
-        # التحقق من صلاحية الكود
         if not code_info['active']:
-            return False, "كود الهدية غير فعال"
+            return False, "❌ الكود غير فعال"
         
-        if datetime.now() > code_info['expires_at']:
-            return False, "كود الهدية منتهي الصلاحية"
+        if code_info['expires_at'] and code_info['expires_at'] < datetime.now():
+            return False, "❌ الكود منتهي الصلاحية"
         
         if code_info['used_count'] >= code_info['max_uses']:
-            return False, "تم استخدام كود الهدية بالكامل"
+            return False, "❌ تم استخدام هذا الكود بالكامل"
         
         # استخدام الكود
-        redemption_id = f"redemption_{int(time.time() * 1000)}"
-        
         success = db_manager.execute_query(
-            """INSERT INTO gift_code_redemptions (redemption_id, code_id, user_id, amount)
-               VALUES (%s, %s, %s, %s)""",
-            (redemption_id, code_info['code_id'], str(user_id), float(code_info['amount']))
+            "UPDATE gift_codes SET used_count = used_count + 1 WHERE code = %s",
+            (code.upper(),)
         )
         
         if success:
-            # تحديث عدد الاستخدامات
             db_manager.execute_query(
-                """UPDATE gift_codes SET used_count = used_count + 1 WHERE code_id = %s""",
-                (code_info['code_id'],)
+                """INSERT INTO gift_code_usage (code, user_id, amount_received) 
+                   VALUES (%s, %s, %s)""",
+                (code.upper(), str(user_id), code_info['amount'])
             )
             
-            # إضافة المبلغ إلى محفظة المستخدم
-            update_wallet_balance(user_id, float(code_info['amount']))
+            # إضافة المبلغ للمحفظة
+            new_balance = update_wallet_balance(user_id, code_info['amount'])
             
             # تسجيل المعاملة
             add_transaction({
                 'user_id': str(user_id),
                 'type': 'gift_code',
-                'amount': float(code_info['amount']),
-                'description': f'هدية من كود: {code}'
+                'amount': code_info['amount'],
+                'description': f"هدية من كود: {code.upper()}"
             })
             
-            return True, f"تم إضافة {code_info['amount']} إلى محفظتك بنجاح!"
-        else:
-            return False, "حدث خطأ أثناء استخدام الكود"
-            
+            return True, f"🎉 تمت إضافة {code_info['amount']} إلى رصيدك بنجاح!"
+        
+        return False, "❌ حدث خطأ أثناء معالجة الكود"
+        
     except Exception as e:
         logger.error(f"خطأ في استخدام كود الهدية: {str(e)}")
-        return False, "حدث خطأ في النظام"
+        return False, "❌ حدث خطأ أثناء معالجة الكود"
 
-def get_gift_code_stats(code_id):
-    """جلب إحصائيات كود الهدية"""
+def create_gift_code(code, amount, max_uses, created_by, expires_hours=24):
+    """إنشاء كود هدية جديد"""
     try:
-        # معلومات الكود
-        code_info = db_manager.execute_query(
-            """SELECT * FROM gift_codes WHERE code_id = %s""",
-            (code_id,)
-        )
+        expires_at = datetime.now() + timedelta(hours=expires_hours) if expires_hours > 0 else None
         
-        if not code_info or len(code_info) == 0:
-            return None
-        
-        # المستخدمين الذين استخدموا الكود
-        redemptions = db_manager.execute_query(
-            """SELECT r.user_id, r.amount, r.redeemed_at, a.username 
-               FROM gift_code_redemptions r
-               LEFT JOIN accounts a ON r.user_id = a.chat_id
-               WHERE r.code_id = %s
-               ORDER BY r.redeemed_at DESC""",
-            (code_id,)
-        )
-        
-        return {
-            'code_info': code_info[0],
-            'redemptions': redemptions if redemptions else []
-        }
-    except Exception as e:
-        logger.error(f"خطأ في جلب إحصائيات الكود: {str(e)}")
-        return None
-
-def get_all_gift_codes():
-    """جلب جميع أكواد الهدايا"""
-    try:
-        codes = db_manager.execute_query(
-            """SELECT * FROM gift_codes ORDER BY created_at DESC"""
-        )
-        return codes if codes else []
-    except Exception as e:
-        logger.error(f"خطأ في جلب أكواد الهدايا: {str(e)}")
-        return []
-
-def deactivate_gift_code(code_id):
-    """تعطيل كود الهدية"""
-    try:
         success = db_manager.execute_query(
-            """UPDATE gift_codes SET active = FALSE WHERE code_id = %s""",
-            (code_id,)
+            """INSERT INTO gift_codes (code, amount, max_uses, created_by, expires_at) 
+               VALUES (%s, %s, %s, %s, %s)""",
+            (code.upper(), amount, max_uses, created_by, expires_at)
         )
         return success
     except Exception as e:
-        logger.error(f"خطأ في تعطيل الكود: {str(e)}")
+        logger.error(f"خطأ في إنشاء كود الهدية: {str(e)}")
         return False
-# معالجة الضغط على زر كود الهدية
-@bot.callback_query_handler(func=lambda call: call.data == "gift_code_section")
-def handle_gift_code_section(call):
-    chat_id = str(call.message.chat.id)
-    message_id = call.message.message_id
-    
-    text = """
-🎟 <b>كود هدية</b>
 
-أدخل الكود للحصول على الهدية
-
-يمكنك الحصول على الأكواد من خلال:
-• 📱 صفحتنا على الفيسبوك
-• 📢 قناتنا على التلغرام
-
-أدخل كود الهدية الآن:
-"""
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
-    
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
+def start_gift_code_input(chat_id):
+    """بدء إدخال كود الهدية"""
+    # التحقق أولاً إذا يمكن استخدام كود اليوم
+    if not can_user_use_gift_code_today(chat_id):
+        bot.send_message(
+            chat_id,
+            "❌ لقد استخدمت كود هدية اليوم بالفعل\n\n⏰ يمكنك استخدام كود جديد بعد 24 ساعة من آخر استخدام",
+            parse_mode="HTML"
         )
-        
-        # تعيين حالة انتظار إدخال الكود
-        user_data[chat_id] = {'state': 'awaiting_gift_code'}
-        
-    except Exception as e:
-        logger.error(f"خطأ في عرض قسم كود الهدية: {str(e)}")
-
-# معالجة إدخال كود الهدية
-@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-                    user_data[str(message.chat.id)].get('state') == 'awaiting_gift_code')
-def handle_gift_code_input(message):
-    chat_id = str(message.chat.id)
-    code = message.text.strip().upper()
-    
-    if len(code) < 4:
-        bot.send_message(chat_id, "❌ كود الهدية غير صحيح")
         return
     
-    # تنظيف الحالة
-    if chat_id in user_data:
-        del user_data[chat_id]
-    
-    # معالجة الكود
-    success, message_text = redeem_gift_code(code, chat_id)
-    
-    if success:
-        bot.send_message(chat_id, f"✅ {message_text}", parse_mode="HTML")
-    else:
-        bot.send_message(chat_id, f"❌ {message_text}", parse_mode="HTML")
-    
-    # العودة للقائمة الرئيسية
-    show_main_menu(chat_id, None)
-
-
-
-
-# معالجة إدارة أكواد الهدايا
-@bot.callback_query_handler(func=lambda call: call.data == "manage_gift_codes")
-def handle_manage_gift_codes(call):
-    chat_id = str(call.message.chat.id)
-    
-    if not is_admin(chat_id):
-        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-        return
-    
-    show_gift_codes_admin(chat_id, call.message.message_id)
-
-def show_gift_codes_admin(chat_id, message_id):
-    """عرض لوحة إدارة أكواد الهدايا"""
-    codes = get_all_gift_codes()
-    
-    text = "🎟 <b>إدارة أكواد الهدايا</b>\n\n"
-    
-    if codes:
-        for code in codes[:10]:  # عرض أول 10 أكواد فقط
-            status = "✅ فعال" if code['active'] else "❌ معطل"
-            expired = "⏰ منتهي" if datetime.now() > code['expires_at'] else "🟢 نشط"
-            
-            text += f"<b>الكود:</b> <code>{code['code']}</code>\n"
-            text += f"<b>المبلغ:</b> {code['amount']}\n"
-            text += f"<b>الاستخدامات:</b> {code['used_count']}/{code['max_uses']}\n"
-            text += f"<b>الحالة:</b> {status} | {expired}\n"
-            text += f"<b>الإنتهاء:</b> {code['expires_at'].strftime('%Y-%m-%d %H:%M')}\n"
-            text += "─" * 20 + "\n"
-    else:
-        text += "❌ لا توجد أكواد هدايا\n"
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("➕ إنشاء كود جديد", callback_data="create_gift_code"),
-        types.InlineKeyboardButton("📋 عرض الكل", callback_data="show_all_gift_codes")
-    )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
-    
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-    except Exception as e:
-        logger.error(f"خطأ في عرض إدارة الأكواد: {str(e)}")
-
-# معالجة إنشاء كود جديد
-@bot.callback_query_handler(func=lambda call: call.data == "create_gift_code")
-def handle_create_gift_code(call):
-    chat_id = str(call.message.chat.id)
-    
-    if not is_admin(chat_id):
-        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-        return
-    
-    user_data[chat_id] = {'state': 'gift_code_amount'}
+    user_data[chat_id] = {'state': 'gift_code_input'}
     
     bot.send_message(
         chat_id,
-        "💰 <b>إنشاء كود هدية جديد</b>\n\nأدخل المبلغ:",
-        parse_mode="HTML",
-        reply_markup=EnhancedKeyboard.create_back_button("manage_gift_codes")
+        "🎟 كود هدية\n\nأدخل الكود للحصول على الهدية\n\nيتم الحصول على الهدية من خلال صفحتنا على الفيسبوك وقناتنا التلغرام",
+        parse_mode="HTML"
     )
 
-# معالجات إدخال بيانات الكود
+def start_create_gift_code(chat_id):
+    """بدء إنشاء كود هدية (للآدمن)"""
+    user_data[chat_id] = {'state': 'create_gift_code'}
+    
+    bot.send_message(
+        chat_id,
+        "🛠 إنشاء كود هدية جديد\n\nأدخل الكود (مثال: WELCOME2024):",
+        parse_mode="HTML"
+    )
 @bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-                    user_data[str(message.chat.id)].get('state') == 'gift_code_amount')
-def handle_gift_code_amount(message):
+                    user_data[str(message.chat.id)].get('state') == 'gift_code_input')
+def handle_gift_code_input(message):
+    """معالجة إدخال كود الهدية"""
+    chat_id = str(message.chat.id)
+    code = message.text.strip().upper()
+    
+    if not code:
+        bot.send_message(chat_id, "❌ يرجى إدخال كود صحيح")
+        return
+    
+    # استخدام الكود
+    success, message_text = use_gift_code(code, chat_id)
+    
+    # تنظيف البيانات
+    if chat_id in user_data:
+        del user_data[chat_id]
+    
+    bot.send_message(chat_id, message_text, parse_mode="HTML")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'create_gift_code')
+def handle_create_gift_code(message):
+    """معالجة إنشاء كود هدية"""
+    chat_id = str(message.chat.id)
+    code = message.text.strip().upper()
+    
+    if not code or len(code) < 3:
+        bot.send_message(chat_id, "❌ يرجى إدخال كود صحيح (3 أحرف على الأقل)")
+        return
+    
+    user_data[chat_id]['gift_code'] = code
+    user_data[chat_id]['state'] = 'create_gift_code_amount'
+    
+    bot.send_message(chat_id, "💰 أدخل مبلغ الهدية:")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'create_gift_code_amount')
+def handle_create_gift_code_amount(message):
+    """معالجة مبلغ كود الهدية"""
     chat_id = str(message.chat.id)
     
     try:
         amount = float(message.text.strip())
-        user_data[chat_id]['gift_code_amount'] = amount
-        user_data[chat_id]['state'] = 'gift_code_max_uses'
         
-        bot.send_message(
-            chat_id,
-            f"🔢 <b>عدد الاستخدامات</b>\n\nأدخل الحد الأقصى لعدد استخدامات الكود:",
-            parse_mode="HTML"
-        )
+        if amount <= 0:
+            bot.send_message(chat_id, "❌ المبلغ يجب أن يكون أكبر من الصفر")
+            return
+        
+        user_data[chat_id]['gift_code_amount'] = amount
+        user_data[chat_id]['state'] = 'create_gift_code_uses'
+        
+        bot.send_message(chat_id, "🔢 أدخل عدد مرات الاستخدام المسموحة:")
+        
     except ValueError:
         bot.send_message(chat_id, "❌ يرجى إدخال مبلغ صحيح")
 
 @bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-                    user_data[str(message.chat.id)].get('state') == 'gift_code_max_uses')
-def handle_gift_code_max_uses(message):
+                    user_data[str(message.chat.id)].get('state') == 'create_gift_code_uses')
+def handle_create_gift_code_uses(message):
+    """معالجة عدد استخدمات كود الهدية"""
     chat_id = str(message.chat.id)
     
     try:
         max_uses = int(message.text.strip())
-        user_data[chat_id]['gift_code_max_uses'] = max_uses
-        user_data[chat_id]['state'] = 'gift_code_hours'
         
-        bot.send_message(
-            chat_id,
-            f"⏰ <b>مدة الصلاحية</b>\n\nأدخل عدد الساعات لصلاحية الكود:",
-            parse_mode="HTML"
-        )
-    except ValueError:
-        bot.send_message(chat_id, "❌ يرجى إدخال عدد صحيح")
-
-@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-                    user_data[str(message.chat.id)].get('state') == 'gift_code_hours')
-def handle_gift_code_hours(message):
-    chat_id = str(message.chat.id)
-    
-    try:
-        hours = int(message.text.strip())
+        if max_uses <= 0:
+            bot.send_message(chat_id, "❌ عدد الاستخدامات يجب أن يكون أكبر من الصفر")
+            return
+        
+        code = user_data[chat_id]['gift_code']
         amount = user_data[chat_id]['gift_code_amount']
-        max_uses = user_data[chat_id]['gift_code_max_uses']
         
         # إنشاء الكود
-        code = create_gift_code(amount, max_uses, hours, chat_id)
+        success = create_gift_code(code, amount, max_uses, str(chat_id))
         
-        if code:
-            # تنظيف البيانات
-            if chat_id in user_data:
-                del user_data[chat_id]
-            
+        # تنظيف البيانات
+        if chat_id in user_data:
+            del user_data[chat_id]
+        
+        if success:
             bot.send_message(
                 chat_id,
-                f"✅ <b>تم إنشاء كود الهدية بنجاح!</b>\n\n"
-                f"<b>الكود:</b> <code>{code}</code>\n"
-                f"<b>المبلغ:</b> {amount}\n"
-                f"<b>الاستخدامات:</b> {max_uses}\n"
-                f"<b>الصلاحية:</b> {hours} ساعة",
+                f"✅ تم إنشاء كود الهدية بنجاح\n\n"
+                f"🎟 الكود: <code>{code}</code>\n"
+                f"💰 المبلغ: {amount}\n"
+                f"🔢 عدد الاستخدامات: {max_uses}",
                 parse_mode="HTML"
             )
         else:
-            bot.send_message(chat_id, "❌ فشل في إنشاء الكود")
-        
-        # العودة للوحة الإدارة
-        show_gift_codes_admin(chat_id, None)
+            bot.send_message(chat_id, "❌ فشل في إنشاء الكود، قد يكون الكود مستخدم مسبقاً")
         
     except ValueError:
         bot.send_message(chat_id, "❌ يرجى إدخال عدد صحيح")
-@bot.callback_query_handler(func=lambda call: call.data.startswith("view_code_users_"))
-def handle_view_code_users(call):
-    chat_id = str(call.message.chat.id)
-    
-    if not is_admin(chat_id):
-        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-        return
-    
-    code_id = call.data.replace("view_code_users_", "")
-    stats = get_gift_code_stats(code_id)
-    
-    if not stats:
-        bot.answer_callback_query(call.id, "لم يتم العثور على بيانات الكود", show_alert=True)
-        return
-    
-    code_info = stats['code_info']
-    redemptions = stats['redemptions']
-    
-    text = f"📋 <b>مستخدمين كود: {code_info['code']}</b>\n\n"
-    text += f"<b>المبلغ:</b> {code_info['amount']}\n"
-    text += f"<b>المستخدمين:</b> {len(redemptions)}/{code_info['max_uses']}\n\n"
-    
-    if redemptions:
-        for i, redemption in enumerate(redemptions, 1):
-            username = redemption['username'] or "غير معروف"
-            text += f"{i}. <code>{redemption['user_id']}</code> - {username}\n"
-            text += f"   <b>المبلغ:</b> {redemption['amount']}\n"
-            text += f"   <b>الوقت:</b> {redemption['redeemed_at'].strftime('%Y-%m-%d %H:%M')}\n\n"
-    else:
-        text += "❌ لا توجد استخدامات للكود بعد\n"
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="manage_gift_codes"))
-    
-    bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=call.message.message_id,
-        text=text,
-        parse_mode="HTML",
-        reply_markup=markup
-    )
 # ===============================================================
 # دوال نظام الإحالات
 # ===============================================================
@@ -3594,7 +3424,186 @@ def is_compensation_request_processed(request_id):
         return status != 'pending'
     return False
 
+def get_last_3_codes_usage():
+    """جلب استخدامات آخر 3 أكواد"""
+    try:
+        result = db_manager.execute_query("""
+            SELECT gc.code, gc.amount, gc.created_at, 
+                   gcu.user_id, gcu.used_at, gcu.usage_id
+            FROM gift_codes gc
+            JOIN gift_code_usage gcu ON gc.code = gcu.code
+            WHERE gc.code IN (
+                SELECT code FROM gift_codes 
+                ORDER BY created_at DESC 
+                LIMIT 3
+            )
+            ORDER BY gc.created_at DESC, gcu.used_at DESC
+        """)
+        return result if result else []
+    except Exception as e:
+        logger.error(f"خطأ في جلب استخدامات الأكواد: {str(e)}")
+        return []
 
+def revoke_gift_code_usage(usage_id):
+    """استرداد مكافأة كود الهدية"""
+    try:
+        # جلب بيانات الاستخدام
+        usage_data = db_manager.execute_query(
+            """SELECT gcu.user_id, gcu.amount_received, gcu.code 
+               FROM gift_code_usage gcu 
+               WHERE gcu.usage_id = %s""",
+            (usage_id,)
+        )
+        
+        if not usage_data or len(usage_data) == 0:
+            return False, "لم يتم العثور على الاستخدام"
+        
+        usage_info = usage_data[0]
+        user_id = usage_info['user_id']
+        amount = usage_info['amount_received']
+        code = usage_info['code']
+        
+        # خصم المبلغ من المستخدم
+        current_balance = get_wallet_balance(user_id)
+        if current_balance < amount:
+            return False, "رصيد المستخدم غير كافي للاسترداد"
+        
+        new_balance = update_wallet_balance(user_id, -amount)
+        
+        # تحديث عدد استخدامات الكود
+        db_manager.execute_query(
+            "UPDATE gift_codes SET used_count = used_count - 1 WHERE code = %s",
+            (code,)
+        )
+        
+        # حذف سجل الاستخدام
+        db_manager.execute_query(
+            "DELETE FROM gift_code_usage WHERE usage_id = %s",
+            (usage_id,)
+        )
+        
+        # تسجيل معاملة الاسترداد
+        add_transaction({
+            'user_id': user_id,
+            'type': 'gift_code_revoke',
+            'amount': -amount,
+            'description': f"استرداد كود: {code}"
+        })
+        
+        return True, f"تم استرداد {amount} من المستخدم {user_id}"
+        
+    except Exception as e:
+        logger.error(f"خطأ في استرداد الكود: {str(e)}")
+        return False, "حدث خطأ أثناء الاسترداد"
+def show_gift_code_management(chat_id, message_id):
+    """عرض إدارة أكواد الهدايا"""
+    usages = get_last_3_codes_usage()
+    
+    if not usages:
+        text = "📊 لا توجد استخدامات لأخر 3 أكواد"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+        
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+        return
+    
+    # تجميع البيانات حسب الكود
+    codes_data = {}
+    for usage in usages:
+        code = usage['code']
+        if code not in codes_data:
+            codes_data[code] = {
+                'amount': usage['amount'],
+                'created_at': usage['created_at'],
+                'usages': []
+            }
+        codes_data[code]['usages'].append(usage)
+    
+    text = "📊 <b>استخدامات آخر 3 أكواد</b>\n\n"
+    
+    for i, (code, data) in enumerate(codes_data.items(), 1):
+        text += f"<b>الكود {i}:</b> <code>{code}</code>\n"
+        text += f"<b>المبلغ:</b> {data['amount']}\n"
+        text += f"<b>وقت الإنشاء:</b> {data['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
+        text += f"<b>عدد المستخدمين:</b> {len(data['usages'])}\n\n"
+        
+        for usage in data['usages']:
+            text += f"👤 المستخدم: <code>{usage['user_id']}</code>\n"
+            text += f"⏰ الوقت: {usage['used_at'].strftime('%Y-%m-%d %H:%M')}\n"
+            text += f"🔄 استرداد: /revoke_{usage['usage_id']}\n"
+            text += "────────────────\n"
+        
+        text += "\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔄 تحديث", callback_data="gift_code_manage"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+def handle_revoke_gift_code(call, usage_id):
+    """معالجة استرداد كود الهدية"""
+    try:
+        success, message = revoke_gift_code_usage(usage_id)
+        
+        if success:
+            bot.answer_callback_query(call.id, f"✅ {message}", show_alert=True)
+        else:
+            bot.answer_callback_query(call.id, f"❌ {message}", show_alert=True)
+            
+        # تحديث العرض
+        show_gift_code_management(call.message.chat.id, call.message.message_id)
+        
+    except Exception as e:
+        logger.error(f"خطأ في معالجة الاسترداد: {str(e)}")
+        bot.answer_callback_query(call.id, "❌ حدث خطأ في الاسترداد", show_alert=True)
+
+@bot.message_handler(func=lambda message: message.text.startswith('/revoke_'))
+def handle_revoke_command(message):
+    """معالجة أمر الاسترداد السريع"""
+    chat_id = str(message.chat.id)
+    
+    if not is_admin(chat_id):
+        bot.send_message(chat_id, "❌ ليس لديك صلاحية لهذا الأمر")
+        return
+    
+    try:
+        usage_id = message.text.replace('/revoke_', '').strip()
+        
+        if not usage_id.isdigit():
+            bot.send_message(chat_id, "❌ رقم الاستخدام غير صحيح")
+            return
+        
+        success, msg = revoke_gift_code_usage(int(usage_id))
+        
+        if success:
+            bot.send_message(chat_id, f"✅ {msg}")
+        else:
+            bot.send_message(chat_id, f"❌ {msg}")
+            
+    except Exception as e:
+        logger.error(f"خطأ في أمر الاسترداد: {str(e)}")
+        bot.send_message(chat_id, "❌ حدث خطأ في الاسترداد")
 # ===============================================================
 # نظام طرق الدفع والسحب
 # ===============================================================
@@ -3725,7 +3734,7 @@ class EnhancedKeyboard:
         markup.add(types.InlineKeyboardButton("🛡️ التعويض الخاص", callback_data="compensation_section"))
         
         markup.add(types.InlineKeyboardButton("🎁 إهداء الرصيد", callback_data="gift_balance"),
-            types.InlineKeyboardButton("🎟 كود هدية", callback_data="gift_code_section"))
+            types.InlineKeyboardButton("🎟 كود هدية", callback_data="gift_code"))
         markup.add(types.InlineKeyboardButton("👥 نظام الإحالات", callback_data="referral_section"))
         markup.add(types.InlineKeyboardButton("🎖 نقاط الامتياز", callback_data="loyalty_section"))
         
@@ -3799,11 +3808,12 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton("🛡️ إدارة التعويض", callback_data="compensation_admin"))
         
         markup.row(
-            types.InlineKeyboardButton("🎁 إدارة الإهداء", callback_data="gift_admin"),
-            types.InlineKeyboardButton("🎟 إدارة أكواد الهدايا", callback_data="manage_gift_codes"),
-            types.InlineKeyboardButton("📊 إحصائيات", callback_data="admin_stats")
+        types.InlineKeyboardButton("🎁 إدارة الإهداء", callback_data="gift_admin")
     )
-        
+        markup.row(
+            types.InlineKeyboardButton("إنشاء كود هدية", callback_data="gift_code_admin"),
+            types.InlineKeyboardButton("إدارة الأكواد", callback_data="gift_code_manage")
+    )
         markup.add(types.
 InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
         return markup
@@ -4895,6 +4905,28 @@ def handle_callbacks(call):
                 export_gift_data(chat_id)
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        
+        elif call.data == "gift_code":
+            start_gift_code_input(chat_id)
+
+        elif call.data == "gift_code_admin":
+            if is_admin(chat_id):
+                start_create_gift_code(chat_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية", show_alert=True)
+        
+        elif call.data == "gift_code_manage":
+            if is_admin(chat_id):
+                show_gift_code_management(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية", show_alert=True)
+
+        elif call.data.startswith("revoke_gift_"):
+            if is_admin(chat_id):
+                usage_id = call.data.replace("revoke_gift_", "")
+                handle_revoke_gift_code(call, usage_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية", show_alert=True)
         
     except Exception as e:
         logger.error(f"❌ خطأ في المعالجة: {e}")
