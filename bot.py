@@ -721,7 +721,8 @@ class DatabaseManager:
                 self.reconnect()
         
             if not self.connection:
-                return False
+                logger.error("❌ لا يوجد اتصال بقاعدة البيانات")
+                return []  # إرجاع قائمة فارغة بدلاً من False
 
             with self.connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(query, params or ())
@@ -729,8 +730,13 @@ class DatabaseManager:
                 # التحقق من نوع الاستعلام بشكل آمن
                 query_upper = query.strip().upper()
                 if query_upper.startswith('SELECT'):
-                    result = cursor.fetchall()
-                    return result
+                    try:
+                        result = cursor.fetchall()
+                    # التحقق من أن النتيجة ليست فارغة قبل الوصول لها
+                        return result if result else []
+                    except Exception as fetch_error:
+                        logger.error(f"❌ خطأ في جلب النتائج: {str(fetch_error)}")
+                        return []
             
                 self.connection.commit()
                 return True
@@ -738,17 +744,12 @@ class DatabaseManager:
         except psycopg2.InterfaceError:
             logger.warning("🔄 إعادة الاتصال بقاعدة البيانات...")
             self.reconnect()
-            return False
-        except IndexError as e:
-            logger.error(f"❌ خطأ في فهرسة النتائج: {str(e)}")
-            if self.connection:
-                self.connection.rollback()
-            return False
+            return []
         except Exception as e:
             logger.error(f"❌ خطأ في تنفيذ الاستعلام: {str(e)}")
             if self.connection:
                 self.connection.rollback()
-            return False
+            return []  # إرجاع قائمة فارغة بدلاً من False
 
     def reconnect(self):
         try:
