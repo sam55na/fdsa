@@ -5815,40 +5815,25 @@ def show_main_menu(chat_id, message_id):
 def show_account_section(chat_id, message_id):
     accounts = load_accounts()
     has_account = str(chat_id) in accounts
-
+    
     text = "<b>⚡ قسم حساب 55BETS</b>\n\n"
-
+    
     if has_account:
         account = accounts[str(chat_id)]
         player_id = account.get("playerId")
-        username = account.get('username', 'غير محدد')
-        password = account.get('password', 'غير محدد')
         account_balance = get_player_balance_via_agent(player_id) if player_id else 'غير متوفر'
         wallet_balance = get_wallet_balance(chat_id)
+        
+        text += f"""✅ لديك حساب نشط
 
-        # اقتباس HTML بشكل أنيق مثل تيليجرام
-        text += (
-            "<blockquote>✅ <b>لديك حساب نشط</b></blockquote>\n\n"
-            "<b>معلومات حسابك:</b></blockquote>\n"
-            
-            "<blockquote>👤 <b>اسم المستخدم:</b> <code>{username}</code></blockquote>\n"
-            "<blockquote>🔐 <b>كلمة المرور:</b> <code>{password}</code></blockquote>\n"
-            "<blockquote>💰 <b>رصيد الحساب:</b> <code>{balance}</code></blockquote>\n"
+<blockquote>👤 <b>اسم المستخدم:</b> </blockquote> <code>{account.get('username', 'غير محدد')}</code>
+<blockquote>💰 <b>رصيد الحساب:</b> </blockquote> <code>{account_balance}</code>
+<blockquote>💳 <b>رصيد المحفظة:</b> </blockquote> <code>{wallet_balance}</code>
 
-            
-            "📋 اختر الإجراء المطلوب:"
-        ).format(
-            username=username,
-            password=password,
-            balance=account_balance,
-            wallet=wallet_balance
-        )
+اختر الإجراء المطلوب:"""
     else:
-        text += (
-            "❌ <b>ليس لديك حساب بعد</b>\n\n"
-            "أنشئ حسابك الآن للبدء:"
-        )
-
+        text += "❌ ليس لديك حساب بعد\n\nأنشئ حسابك الآن للبدء:"
+    
     try:
         bot.edit_message_text(
             chat_id=chat_id,
@@ -5857,13 +5842,14 @@ def show_account_section(chat_id, message_id):
             parse_mode="HTML",
             reply_markup=EnhancedKeyboard.create_account_section(has_account)
         )
-    except Exception:
+    except:
         bot.send_message(
-            chat_id=chat_id,
-            text=text,
+            chat_id,
+            text,
             parse_mode="HTML",
             reply_markup=EnhancedKeyboard.create_account_section(has_account)
         )
+
 
 def handle_subscription_check(call, chat_id, message_id):
     if is_user_subscribed(call.from_user.id):
@@ -5959,11 +5945,11 @@ def show_account_info(chat_id, message_id):
         account_info = f"""
 <b>👤 معلومات الحساب</b>
 
-👤<blockquote> <b>اسم المستخدم:</b></blockquote> <code>{account.get('username', 'غير محدد')}</code>
-🔐<blockquote> <b>كلمة المرور:</b></blockquote> <code>{account.get('password', 'غير محدد')}</code>
-🆔<blockquote> <b>رقم اللاعب:</b></blockquote> <code>{player_id if player_id else 'غير محدد'}</code>
-💰<blockquote> <b>رصيد الحساب:</b></blockquote> <code>{balance}</code>
-
+👤 <b>اسم المستخدم:</b> <code>{account.get('username', 'غير محدد')}</code>
+🔐 <b>كلمة المرور:</b> <code>{account.get('password', 'غير محدد')}</code>
+🆔 <b>رقم اللاعب:</b> <code>{player_id if player_id else 'غير محدد'}</code>
+💰 <b>رصيد الحساب:</b> <code>{balance}</code>
+💳 <b>رصيد المحفظة:</b> <code>{wallet_balance}</code>
         """
         
         markup = types.InlineKeyboardMarkup()
@@ -5992,6 +5978,7 @@ def show_account_info(chat_id, message_id):
             parse_mode="HTML",
             reply_markup=EnhancedKeyboard.create_back_button("account_section")
         )
+
 
 def start_deposit_to_account(chat_id):
     accounts = load_accounts()
