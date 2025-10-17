@@ -2967,8 +2967,11 @@ def toggle_dice_reward(dice_value, active):
 def can_user_play_dice(user_id):
     """التحقق إذا كان المستخدم يمكنه لعب النرد"""
     try:
-        cooldown_hours = int(get_dice_settings().get('cooldown_hours', 24))
+        settings = get_dice_settings()
+        dice_price = float(settings.get('dice_price', 100))
+        cooldown_hours = int(settings.get('cooldown_hours', 24))
         
+        # التحقق من وقت الانتظار
         result = db_manager.execute_query(
             "SELECT last_play FROM dice_cooldown WHERE user_id = %s",
             (str(user_id),)
@@ -2978,9 +2981,21 @@ def can_user_play_dice(user_id):
             last_play = result[0]['last_play']
             time_diff = datetime.now() - last_play
             if time_diff.total_seconds() < cooldown_hours * 3600:
-                return False, f"يجب الانتظار {cooldown_hours} ساعة بين كل لعب"
+                return False, f"يمكنك اللعب مرة أخرى بعد {cooldown_hours} ساعة"
+        
+        # التحقق من وجود عملية دفع ناجحة بقيمة كافية
+        payment_result = db_manager.execute_query(
+            "SELECT amount FROM payment_requests WHERE user_id = %s AND status = 'approved' "
+            "AND amount >= %s AND approved_at >= CURRENT_DATE - INTERVAL '1 day' "
+            "ORDER BY approved_at DESC LIMIT 1",
+            (str(user_id), dice_price)
+        )
+        
+        if not payment_result or len(payment_result) == 0:
+            return False, f"تحتاج إلى عملية دفع ناجحة بقيمة {dice_price} على الأقل خلال 24 ساعة"
         
         return True, "يمكنك اللعب الآن"
+        
     except Exception as e:
         logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
         return False, "حدث خطأ في النظام"
@@ -3064,25 +3079,38 @@ def show_dice_section(chat_id, message_id):
     user_stats = get_user_dice_stats(chat_id)
     can_play, message = can_user_play_dice(chat_id)
     
+    # التحقق من آخر عملية دفع مؤهلة
+    dice_price = float(settings.get('dice_price', 100))
+    payment_result = db_manager.execute_query(
+        "SELECT amount FROM payment_requests WHERE user_id = %s AND status = 'approved' "
+        "AND amount >= %s AND approved_at >= CURRENT_DATE - INTERVAL '1 day' "
+        "ORDER BY approved_at DESC LIMIT 1",
+        (str(chat_id), dice_price)
+    )
+    
+    has_qualifying_payment = payment_result and len(payment_result) > 0
+    
     text = f"""
-🎲 <b>لعبة النرد</b>
+🎲 <b>لعبة النرد - المكافآت</b>
 
-<b>المعلومات:</b>
-• سعر اللعب: <b>{settings.get('dice_price')}</b>
-• مدة الانتظار: <b>{settings.get('cooldown_hours')}</b> ساعة
-• الحالة: <b>{"🟢 مفعل" if settings.get('dice_enabled') == 'true' else "🔴 معطل"}</b>
+<b>شروط اللعب:</b>
+• عملية دفع ناجحة بقيمة <b>{dice_price}</b> على الأقل
+• مرة واحدة كل <b>{settings.get('cooldown_hours')}</b> ساعة
+• <b>مجاني تماماً</b> - بدون خصم أي مبالغ
 
-<b>إحصائياتك:</b>
-• عدد المرات: <b>{user_stats['play_count']}</b>
-• المبلغ المدفوع: <b>{user_stats['total_paid']:.2f}</b>
-• المبلغ المربح: <b>{user_stats['total_won']:.2f}</b>
+<b>حالتك الحالية:</b>
+• الأهلية: <b>{"🟢 مؤهل" if has_qualifying_payment else "🔴 غير مؤهل"}</b>
+• الانتظار: <b>{"🟢 يمكنك اللعب" if can_play else "🔴 يجب الانتظار"}</b>
 
 {'🟢 ' + message if can_play else '🔴 ' + message}
 """
 
     markup = types.InlineKeyboardMarkup()
     if can_play and settings.get('dice_enabled') == 'true':
-        markup.add(types.InlineKeyboardButton("🎲 العب النرد", callback_data="play_dice"))
+        markup.add(types.InlineKeyboardButton("🎲 العب النرد مجاناً", callback_data="play_dice"))
+    else:
+        if not has_qualifying_payment:
+            markup.add(types.InlineKeyboardButton("💳 إيداع رصيد", callback_data="payment_methods"))
     
     markup.add(types.InlineKeyboardButton("📊 الجوائز", callback_data="dice_rewards"))
     markup.add(types.InlineKeyboardButton("📈 الإحصائيات", callback_data="dice_stats"))
@@ -3119,24 +3147,13 @@ def handle_play_dice(call):
         bot.answer_callback_query(call.id, "النظام معطل حالياً", show_alert=True)
         return
     
-    # التحقق من الانتظار
+    # التحقق من الأهلية
     can_play, message = can_user_play_dice(chat_id)
     if not can_play:
         bot.answer_callback_query(call.id, message, show_alert=True)
         return
     
-    # التحقق من الرصيد
-    dice_price = float(settings.get('dice_price', 100))
-    wallet_balance = get_wallet_balance(chat_id)
-    
-    if wallet_balance < dice_price:
-        bot.answer_callback_query(call.id, f"رصيدك غير كافي. السعر: {dice_price}", show_alert=True)
-        return
-    
-    # خصم المبلغ
-    new_balance = update_wallet_balance(chat_id, -dice_price)
-    
-    # إرسال النرد
+    # إرسال النرد مباشرة (بدون خصم)
     dice_message = bot.send_dice(chat_id, emoji='🎲')
     
     # استخدام مؤقت لانتظار النتيجة
@@ -3148,16 +3165,15 @@ def handle_play_dice(call):
             # حساب الجائزة
             final_reward, reward_type = calculate_dice_reward(chat_id, dice_value)
             
-            # إضافة الجائزة للمحفظة
+            # إضافة الجائزة للمحفظة كمكافئة
             if final_reward > 0:
-                update_wallet_balance(chat_id, final_reward)
+                new_balance = update_wallet_balance(chat_id, final_reward)
             
             # تحديث وقت اللعب
             update_user_cooldown(chat_id)
             
-            # تسجيل اللعبة
-            log_dice_play(chat_id, dice_value, dice_price, reward_type, 
-                         final_reward, final_reward)
+            # تسجيل اللعبة (بدون مبلغ مدفوع)
+            log_dice_play(chat_id, dice_value, 0, reward_type, final_reward, final_reward)
             
             # إرسال النتيجة
             emojis = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
@@ -3167,12 +3183,14 @@ def handle_play_dice(call):
 🎲 <b>نتيجة النرد</b>
 
 • الرقم: <b>{dice_value}</b> {emoji}
-• المبلغ المدفوع: <b>{dice_price:.2f}</b>
 • الجائزة: <b>{final_reward:.2f}</b>
-• رصيدك الجديد: <b>{new_balance + final_reward:.2f}</b>
+• نوع الجائزة: <b>{get_reward_type_text(reward_type)}</b>
 
 {'🎉 مبروك! ربحت جائزة!' if final_reward > 0 else '😞 لم تربح هذه المرة'}
 """
+            
+            if final_reward > 0:
+                result_text += f"\n• رصيدك الجديد: <b>{new_balance:.2f}</b>"
             
             bot.send_message(chat_id, result_text, parse_mode="HTML")
             
@@ -3186,6 +3204,15 @@ def handle_play_dice(call):
     timer_thread.start()
     
     bot.answer_callback_query(call.id, "جاري معالجة طلبك...")
+
+def get_reward_type_text(reward_type):
+    """نص وصفي لنوع الجائزة"""
+    types = {
+        'fixed': 'مبلغ ثابت',
+        'percentage': 'نسبة من آخر إيداع', 
+        'bonus': 'جائزة حظ سعيد'
+    }
+    return types.get(reward_type, reward_type)
 
 def show_dice_rewards(chat_id, message_id):
     """عرض جوايز النرد"""
@@ -3240,26 +3267,21 @@ def show_dice_admin_panel(chat_id, message_id):
         return
     
     settings = get_dice_settings()
-    rewards = get_dice_rewards()
     
     text = f"""
-⚙️ <b>إدارة نظام النرد</b>
+⚙️ <b>إدارة نظام النرد - المكافآت</b>
 
 <b>الإعدادات الحالية:</b>
 • الحالة: <b>{"🟢 مفعل" if settings.get('dice_enabled') == 'true' else "🔴 معطل"}</b>
-• سعر اللعب: <b>{settings.get('dice_price')}</b>
+• حد الدفع المطلوب: <b>{settings.get('dice_price')}</b>
 • ساعات الانتظار: <b>{settings.get('cooldown_hours')}</b>
 
-<b>الجوائز:</b>
+<b>معلومات النظام:</b>
+• اللعب <b>مجاني</b> - بدون خصم مبالغ
+• يشترط عملية دفع ناجحة بقيمة الحد المطلوب
+• مرة واحدة يومياً لكل مستخدم
+• الجوائز تضاف إلى رصيد المحفظة
 """
-    
-    for dice_value in range(1, 7):
-        reward = rewards.get(dice_value)
-        if reward:
-            status = "🟢" if reward['active'] else "🔴"
-            text += f"• {status} الرقم {dice_value}: {reward['reward_type']} - {reward['reward_value']}\n"
-        else:
-            text += f"• ⚫ الرقم {dice_value}: غير محدد\n"
 
     markup = types.InlineKeyboardMarkup()
     markup.row(
@@ -3352,14 +3374,13 @@ def show_dice_stats(chat_id, message_id):
     user_stats = get_user_dice_stats(chat_id)
     
     text = f"""
-📊 <b>إحصائيات النرد</b>
+📊 <b>إحصائيات النرد - المكافآت</b>
 
 • عدد المرات: <b>{user_stats['play_count']}</b>
-• المبلغ المدفوع: <b>{user_stats['total_paid']:.2f}</b>
-• المبلغ المربح: <b>{user_stats['total_won']:.2f}</b>
-• الصافي: <b>{user_stats['total_won'] - user_stats['total_paid']:.2f}</b>
+• إجمالي الجوائز: <b>{user_stats['total_won']:.2f}</b>
+• متوسط الجائزة: <b>{(user_stats['total_won'] / user_stats['play_count']) if user_stats['play_count'] > 0 else 0:.2f}</b>
 
-{'🟢 أرباح إيجابية' if user_stats['total_won'] > user_stats['total_paid'] else '🔴 أرباح سلبية'}
+<b>ملاحظة:</b> النظام مجاني تماماً - الجوائز فقط بدون مدفوعات
 """
 
     markup = types.InlineKeyboardMarkup()
