@@ -3401,6 +3401,214 @@ def show_dice_stats(chat_id, message_id):
             parse_mode="HTML",
             reply_markup=markup
         )
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_dice_price")
+def handle_edit_dice_price(call):
+    chat_id = str(call.message.chat.id)
+    if not is_admin(chat_id):
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    
+    user_data[chat_id] = {'state': 'edit_dice_price'}
+    settings = get_dice_settings()
+    current_price = float(settings.get('dice_price', 100))
+    
+    bot.send_message(
+        chat_id,
+        f"<b>تعديل سعر اللعب</b>\n\n"
+        f"السعر الحالي: <b>{current_price}</b>\n\n"
+        "أرسل السعر الجديد:",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("dice_settings")
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_dice_cooldown")
+def handle_edit_dice_cooldown(call):
+    chat_id = str(call.message.chat.id)
+    if not is_admin(chat_id):
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    
+    user_data[chat_id] = {'state': 'edit_dice_cooldown'}
+    settings = get_dice_settings()
+    current_cooldown = int(settings.get('cooldown_hours', 24))
+    
+    bot.send_message(
+        chat_id,
+        f"<b>تعديل وقت الانتظار</b>\n\n"
+        f"الوقت الحالي: <b>{current_cooldown} ساعة</b>\n\n"
+        "أرسل عدد الساعات الجديد:",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("dice_settings")
+    )
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'edit_dice_price')
+def handle_edit_dice_price_input(message):
+    chat_id = str(message.chat.id)
+    try:
+        new_price = float(message.text.strip())
+        if new_price < 1:
+            bot.send_message(chat_id, "يجب أن يكون السعر أكبر من 0")
+            return
+        
+        settings = get_dice_settings()
+        settings['dice_price'] = str(new_price)
+        if save_dice_settings(settings):
+            bot.send_message(chat_id, f"✅ تم تحديث سعر اللعب إلى {new_price}")
+        else:
+            bot.send_message(chat_id, "❌ فشل في تحديث الإعدادات")
+        
+        # تنظيف البيانات والعودة
+        if chat_id in user_data:
+            del user_data[chat_id]
+        show_dice_settings_admin(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'edit_dice_cooldown')
+def handle_edit_dice_cooldown_input(message):
+    chat_id = str(message.chat.id)
+    try:
+        new_cooldown = int(message.text.strip())
+        if new_cooldown < 1:
+            bot.send_message(chat_id, "يجب أن يكون الوقت أكبر من 0")
+            return
+        
+        settings = get_dice_settings()
+        settings['cooldown_hours'] = str(new_cooldown)
+        if save_dice_settings(settings):
+            bot.send_message(chat_id, f"✅ تم تحديث وقت الانتظار إلى {new_cooldown} ساعة")
+        else:
+            bot.send_message(chat_id, "❌ فشل في تحديث الإعدادات")
+        
+        # تنظيف البيانات والعودة
+        if chat_id in user_data:
+            del user_data[chat_id]
+        show_dice_settings_admin(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+@bot.callback_query_handler(func=lambda call: call.data == "manage_dice_rewards")
+def handle_manage_dice_rewards(call):
+    chat_id = str(call.message.chat.id)
+    if not is_admin(chat_id):
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    show_dice_rewards_management(chat_id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_admin_stats")
+def handle_dice_admin_stats(call):
+    chat_id = str(call.message.chat.id)
+    if not is_admin(chat_id):
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    show_dice_admin_stats(chat_id, call.message.message_id)
+
+
+def show_dice_rewards_management(chat_id, message_id):
+    """عرض إدارة جوائز النرد"""
+    rewards = get_dice_rewards()
+    
+    text = "<b>إدارة جوائز النرد</b>\n\n"
+    
+    if rewards:
+        for dice_value in range(1, 7):
+            reward = rewards.get(dice_value)
+            if reward:
+                status = "✅ مفعل" if reward['active'] else "❌ معطل"
+                text += f"<b>الرقم {dice_value}:</b>\n"
+                text += f"النوع: {reward['reward_type']}\n"
+                text += f"القيمة: {reward['reward_value']}\n"
+                text += f"الحالة: {status}\n\n"
+    else:
+        text += "❌ لا توجد جوائز مضافة\n\n"
+    
+    text += "اختر الإجراء المطلوب:"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🔄 تحديث", callback_data="manage_dice_rewards"),
+        types.InlineKeyboardButton("➕ إضافة جائزة", callback_data="add_dice_reward")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+def show_dice_admin_stats(chat_id, message_id):
+    """عرض إحصائيات النرد للإدارة"""
+    try:
+        # إحصائيات اللعب
+        result = db_manager.execute_query("""
+            SELECT COUNT(*) as total_plays, 
+                   SUM(final_reward) as total_rewards,
+                   AVG(final_reward) as avg_reward
+            FROM dice_plays
+        """)
+        
+        if result and len(result) > 0:
+            stats = result[0]
+            total_plays = stats['total_plays'] or 0
+            total_rewards = float(stats['total_rewards'] or 0)
+            avg_reward = float(stats['avg_reward'] or 0)
+        else:
+            total_plays = 0
+            total_rewards = 0
+            avg_reward = 0
+        
+        # عدد المستخدمين النشطين
+        users_result = db_manager.execute_query("""
+            SELECT COUNT(DISTINCT user_id) as active_users
+            FROM dice_plays 
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+        """)
+        active_users = users_result[0]['active_users'] if users_result else 0
+        
+        text = f"""
+<b>📊 إحصائيات نظام النرد</b>
+
+<b>الإحصائيات العامة:</b>
+• إجمالي مرات اللعب: <b>{total_plays}</b>
+• إجمالي الجوائز الموزعة: <b>{total_rewards:.2f}</b>
+• متوسط الجائزة: <b>{avg_reward:.2f}</b>
+• المستخدمين النشطين (أسبوع): <b>{active_users}</b>
+
+<b>ملاحظة:</b>
+النظام مجاني تماماً - الجوائز فقط بدون مدفوعات
+"""
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+        
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+        
+    except Exception as e:
+        logger.error(f"خطأ في عرض إحصائيات النرد: {str(e)}")
+        bot.answer_callback_query(chat_id, "حدث خطأ في جلب الإحصائيات", show_alert=True)
+
+
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -5781,6 +5989,35 @@ def handle_callbacks(call):
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
         
+        elif call.data == "edit_dice_price":
+            if is_admin(chat_id):
+                handle_edit_dice_price(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+    
+        elif call.data == "edit_dice_cooldown":
+            if is_admin(chat_id):
+                handle_edit_dice_cooldown(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+    
+        elif call.data == "manage_dice_rewards":
+            if is_admin(chat_id):
+                handle_manage_dice_rewards(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+    
+        elif call.data == "dice_admin_stats":
+            if is_admin(chat_id):
+                handle_dice_admin_stats(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+    
+        elif call.data == "toggle_dice_system":
+            if is_admin(chat_id):
+                toggle_dice_system(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
         
         
     except Exception as e:
@@ -8947,6 +9184,110 @@ def handle_edit_gift_commission_input(message):
 def handle_edit_gift_min_amount_input(message):
     handle_edit_gift_min_amount(message)
 
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_dice_reward")
+def handle_add_dice_reward(call):
+    chat_id = str(call.message.chat.id)
+    if not is_admin(chat_id):
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    
+    user_data[chat_id] = {'state': 'add_dice_reward_number'}
+    bot.send_message(
+        chat_id,
+        "<b>إضافة جائزة نرد جديدة</b>\n\n"
+        "الخطوة 1/4: أرسل رقم النرد (1-6)",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("manage_dice_rewards")
+    )
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'add_dice_reward_number')
+def handle_add_dice_reward_number(message):
+    chat_id = str(message.chat.id)
+    try:
+        dice_value = int(message.text.strip())
+        if dice_value < 1 or dice_value > 6:
+            bot.send_message(chat_id, "يجب أن يكون الرقم بين 1 و 6")
+            return
+        
+        user_data[chat_id]['dice_value'] = dice_value
+        user_data[chat_id]['state'] = 'add_dice_reward_type'
+        
+        bot.send_message(
+            chat_id,
+            "<b>الخطوة 2/4:</b> اختر نوع الجائزة:\n\n"
+            "• fixed - مبلغ ثابت\n"
+            "• percentage - نسبة من الإيداع\n"
+            "• bonus - جائزة عشوائية",
+            parse_mode="HTML"
+        )
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح بين 1 و 6")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'add_dice_reward_type')
+def handle_add_dice_reward_type(message):
+    chat_id = str(message.chat.id)
+    reward_type = message.text.strip().lower()
+    
+    if reward_type not in ['fixed', 'percentage', 'bonus']:
+        bot.send_message(chat_id, "اختر من: fixed, percentage, bonus")
+        return
+    
+    user_data[chat_id]['reward_type'] = reward_type
+    user_data[chat_id]['state'] = 'add_dice_reward_value'
+    
+    example = "50" if reward_type == 'fixed' else "10" if reward_type == 'percentage' else "100"
+    
+    bot.send_message(
+        chat_id,
+        f"<b>الخطوة 3/4:</b> أرسل قيمة الجائزة\n"
+        f"<em>مثال: {example}</em>",
+        parse_mode="HTML"
+    )
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'add_dice_reward_value')
+def handle_add_dice_reward_value(message):
+    chat_id = str(message.chat.id)
+    try:
+        reward_value = float(message.text.strip())
+        
+        user_data[chat_id]['reward_value'] = reward_value
+        user_data[chat_id]['state'] = 'add_dice_reward_description'
+        
+        bot.send_message(
+            chat_id,
+            "<b>الخطوة 4/4:</b> أرسل وصف الجائزة (اختياري)",
+            parse_mode="HTML"
+        )
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'add_dice_reward_description')
+def handle_add_dice_reward_description(message):
+    chat_id = str(message.chat.id)
+    description = message.text.strip()
+    
+    # حفظ الجائزة
+    dice_value = user_data[chat_id]['dice_value']
+    reward_type = user_data[chat_id]['reward_type']
+    reward_value = user_data[chat_id]['reward_value']
+    
+    success = save_dice_reward(dice_value, reward_type, reward_value, description)
+    
+    if success:
+        bot.send_message(chat_id, f"✅ تم إضافة جائزة للرقم {dice_value} بنجاح")
+    else:
+        bot.send_message(chat_id, "❌ فشل في إضافة الجائزة")
+    
+    # تنظيف البيانات والعودة
+    if chat_id in user_data:
+        del user_data[chat_id]
+    show_dice_rewards_management(chat_id, None)
 
 # ===============================================================
 # نظام التذكير التلقائي
