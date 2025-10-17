@@ -5824,8 +5824,8 @@ def show_account_section(chat_id, message_id):
         account_balance = get_player_balance_via_agent(player_id) if player_id else 'غير متوفر'
         wallet_balance = get_wallet_balance(chat_id)
         
-        text += f"""✅ لديك حساب نشط
-
+        text += f"""<b>✅ معلومات  تسجيل الدخول لحسابك في bets55
+</b>
 <blockquote>👤 <b>اسم المستخدم:</b> </blockquote> <code>{account.get('username', 'غير محدد')}</code>
 <blockquote>💰 <b>رصيد الحساب:</b> </blockquote> <code>{account_balance}</code>
 <blockquote>💳 <b>رصيد المحفظة:</b> </blockquote> <code>{wallet_balance}</code>
