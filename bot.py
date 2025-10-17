@@ -3731,8 +3731,8 @@ class EnhancedKeyboard:
         markup.add(types.InlineKeyboardButton("⛓️ رابط موقع 55BETS", url="https://www.55bets.net/"))
         # أزرار طرق السحب والدفع
         markup.row(
-            types.InlineKeyboardButton("📤 سحب حوالة مالية", callback_data="withdraw_methods"),
-            types.InlineKeyboardButton("📥 شحن محفظة البوت", callback_data="payment_methods")
+            types.InlineKeyboardButton("        📤 سحب حوالة مالية        ", callback_data="withdraw_methods"),
+            types.InlineKeyboardButton("        📥 شحن محفظة البوت        ", callback_data="payment_methods")
         )
         
         # زر سجل الرصيد والإحالات
