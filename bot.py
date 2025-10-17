@@ -866,56 +866,60 @@ class DiceGameManager:
         """التحقق إذا كان المستخدم يمكنه لعب النرد"""
         try:
             settings = self.get_dice_settings()
-            
+        
+            # التحقق من تفعيل اللعبة
             if settings.get('game_enabled', 'true') != 'true':
                 return False, "اللعبة غير مفعلة حالياً"
-            
-            # التحقق من عملية الدفع
+        
+            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة
             payment_result = self.db_manager.execute_query("""
-                SELECT amount FROM transactions 
+                SELECT amount, type, created_at 
+                FROM transactions 
                 WHERE user_id = %s AND type = 'deposit' 
                 AND created_at >= NOW() - INTERVAL '24 hours'
                 ORDER BY created_at DESC LIMIT 1
             """, (str(user_id),))
-            
+        
             if not payment_result:
                 return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
-            
-            last_payment = float(payment_result[0]['amount'])
-            min_payment = float(settings.get('min_payment_amount', 100))
-            
-            if last_payment < min_payment:
-                return False, f"يجب أن تكون آخر عملية دفع بقيمة {min_payment} على الأقل"
-            
-            # التحقق من الوقت بين المحاولات
-            cooldown = int(settings.get('cooldown_hours', 24))
-            last_play = self.db_manager.execute_query("""
+        
+            last_payment_amount = float(payment_result[0]['amount'])
+            min_payment_amount = float(settings.get('min_payment_amount', 100))
+        
+            if last_payment_amount < min_payment_amount:
+                return False, f"يجب أن تكون آخر عملية دفع بقيمة {min_payment_amount} على الأقل"
+        
+            # التحقق من المدة بين المحاولات
+            cooldown_hours = int(settings.get('cooldown_hours', 24))
+            last_play_result = self.db_manager.execute_query("""
                 SELECT played_at FROM dice_game_history 
-                WHERE user_id = %s ORDER BY played_at DESC LIMIT 1
+                WHERE user_id = %s 
+                ORDER BY played_at DESC LIMIT 1
             """, (str(user_id),))
-            
-            if last_play:
-                last_play_time = last_play[0]['played_at']
-                if datetime.now() - last_play_time < timedelta(hours=cooldown):
-                    return False, f"يمكنك اللعب مرة أخرى بعد {cooldown} ساعة"
-            
-            # التحقق من الحد اليومي
-            max_plays = int(settings.get('max_plays_per_day', 1))
-            today_plays = self.db_manager.execute_query("""
+        
+            if last_play_result:
+                last_play_time = last_play_result[0]['played_at']
+                time_diff = datetime.now() - last_play_time
+                if time_diff < timedelta(hours=cooldown_hours):
+                    remaining_hours = cooldown_hours - (time_diff.seconds // 3600)
+                    return False, f"يمكنك اللعب مرة أخرى بعد {remaining_hours} ساعة"
+        
+            # التحقق من الحد الأقصى للمحاولات اليومية
+            max_plays_per_day = int(settings.get('max_plays_per_day', 1))
+            today_plays_result = self.db_manager.execute_query("""
                 SELECT COUNT(*) as play_count FROM dice_game_history 
                 WHERE user_id = %s AND played_at >= CURRENT_DATE
             """, (str(user_id),))
-            
-            today_count = today_plays[0]['play_count'] if today_plays else 0
-            if today_count >= max_plays:
-                return False, f"لقد استنفذت عدد محاولاتك اليومية ({max_plays} محاولة)"
-            
-            return True, last_payment
+        
+            today_plays = today_plays_result[0]['play_count'] if today_plays_result else 0
+            if today_plays >= max_plays_per_day:
+                return False, f"لقد استنفذت عدد محاولاتك اليومية ({max_plays_per_day} محاولة)"
+        
+            return True, last_payment_amount
             
         except Exception as e:
             logger.error(f"Error in can_user_play_dice: {str(e)}")
-            return False, "حدث خطأ في التحقق"
-    
+            return False, "حدث خطأ في التحقق"    
     def play_dice_game(self, user_id):
         """تشغيل لعبة النرد"""
         try:
