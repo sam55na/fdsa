@@ -5828,14 +5828,14 @@ def show_account_section(chat_id, message_id):
 
         # اقتباس HTML بشكل أنيق مثل تيليجرام
         text += (
-            "✅ <b>لديك حساب نشط</b>\n\n"
-            "<b>معلومات حسابك:</b>\n"
-            "<blockquote>"
-            "👤 <b>اسم المستخدم:</b> <code>{username}</code>\n"
-            "🔐 <b>كلمة المرور:</b> <code>{password}</code>\n"
-            "💰 <b>رصيد الحساب:</b> <code>{balance}</code>\n"
-            "💳 <b>رصيد المحفظة:</b> <code>{wallet}</code>"
-            "</blockquote>\n"
+            "<blockquote>✅ <b>لديك حساب نشط</b></blockquote>\n\n"
+            "<b>معلومات حسابك:</b></blockquote>\n"
+            
+            "<blockquote>👤 <b>اسم المستخدم:</b> <code>{username}</code></blockquote>\n"
+            "<blockquote>🔐 <b>كلمة المرور:</b> <code>{password}</code></blockquote>\n"
+            "<blockquote>💰 <b>رصيد الحساب:</b> <code>{balance}</code></blockquote>\n"
+
+            
             "📋 اختر الإجراء المطلوب:"
         ).format(
             username=username,
@@ -5959,11 +5959,11 @@ def show_account_info(chat_id, message_id):
         account_info = f"""
 <b>👤 معلومات الحساب</b>
 
-👤 <b>اسم المستخدم:</b> <code>{account.get('username', 'غير محدد')}</code>
-🔐 <b>كلمة المرور:</b> <code>{account.get('password', 'غير محدد')}</code>
-🆔 <b>رقم اللاعب:</b> <code>{player_id if player_id else 'غير محدد'}</code>
-💰 <b>رصيد الحساب:</b> <code>{balance}</code>
-💳 <b>رصيد المحفظة:</b> <code>{wallet_balance}</code>
+👤<blockquote> <b>اسم المستخدم:</b></blockquote> <code>{account.get('username', 'غير محدد')}</code>
+🔐<blockquote> <b>كلمة المرور:</b></blockquote> <code>{account.get('password', 'غير محدد')}</code>
+🆔<blockquote> <b>رقم اللاعب:</b></blockquote> <code>{player_id if player_id else 'غير محدد'}</code>
+💰<blockquote> <b>رصيد الحساب:</b></blockquote> <code>{balance}</code>
+
         """
         
         markup = types.InlineKeyboardMarkup()
