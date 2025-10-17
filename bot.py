@@ -715,27 +715,45 @@ class DatabaseManager:
                 self.connection.rollback()
 
     def execute_query(self, query, params=None):
+        """تنفيذ استعلام على قاعدة البيانات مع معالجة محسنة للأخطاء"""
         try:
             if not self.connection or self.connection.closed:
                 self.reconnect()
-                if not self.connection:
-                    return False
-                    
+            if not self.connection:
+                # إرجاع قيمة مناسبة حسب نوع الاستعلام
+                if query.strip().upper().startswith('SELECT'):
+                    return []
+                return False
+
             with self.connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(query, params or ())
+            
+                # معالجة استعلامات SELECT
                 if query.strip().upper().startswith('SELECT'):
                     result = cursor.fetchall()
-                    return result
+                    # تأكد من إرجاع قائمة فارغة بدلاً من None
+                    return result if result is not None else []
+            
+                # استعلامات INSERT/UPDATE/DELETE
                 self.connection.commit()
                 return True
+            
         except psycopg2.InterfaceError:
-            logger.warning("🔄 إعادة الاتصال بقاعدة البيانات...")
+            logger.warning("... إعادة الاتصال بقاعدة البيانات.")
             self.reconnect()
+            # إرجاع قيمة مناسبة حسب نوع الاستعلام
+            if query.strip().upper().startswith('SELECT'):
+                return []
             return False
+        
         except Exception as e:
-            logger.error(f"❌ خطأ في تنفيذ الاستعلام: {str(e)}")
+            logger.error(f"خطأ في تنفيذ الاستعلام: {str(e)}")
             if self.connection:
                 self.connection.rollback()
+        
+            # إرجاع قيمة مناسبة حسب نوع الاستعلام
+            if query.strip().upper().startswith('SELECT'):
+                return []
             return False
 
     def reconnect(self):
@@ -794,50 +812,58 @@ class DiceGame:
         """التحقق إذا كان المستخدم يمكنه اللعب"""
         try:
             user_id_str = str(user_id)
-            
+
             # التحقق من آخر مرة لعب
             result = db_manager.execute_query(
                 "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
-                (user_id_str,)
-            )
-            
+                (user_id_str)
+        )
+
             if result and len(result) > 0:
                 last_play_date = result[0].get('last_play_date')
                 if last_play_date:
                     settings = self.get_game_settings()
                     cooldown_hours = settings['cooldown_hours']
-                    
+
                     time_passed = (datetime.now() - last_play_date).total_seconds()
                     if time_passed < cooldown_hours * 3600:
                         remaining_time = (cooldown_hours * 3600) - time_passed
                         hours = int(remaining_time // 3600)
                         minutes = int((remaining_time % 3600) // 60)
-                        return False, f"يمكنك اللعب مرة أخرى بعد {hours:02d}:{minutes:02d}"
-            
-            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة
-            payment_result = db_manager.execute_query(
-                "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
-                "AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 1",
-                (user_id_str,)
-            )
-            
+                        return False, f"متبقي {hours:02d}:{minutes:02d} ساعة أخرى للعب"
+
+            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة - الإصلاح هنا
+            payment_result = db_manager,execute_query(
+                'SELECT amount FROM transactions WHERE user_id = %s AND type = \'deposit\' '
+                'AND created_at >= NOW() - INTERVAL \'24 hours\' ORDER BY created_at DESC '
+            'LIMIT 1',
+                (user_id_str)
+        )
+
+            # تحقق شامل من جميع الحالات الفارغة
             if not payment_result or len(payment_result) == 0:
                 return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
+
+            # تحقق إضافي من هيكل البيانات
+            try:
+                payment_data = payment_result[0]
+                if not payment_data or 'amount' not in payment_data or payment_data['amount'] is None:
+                    return False, "خطأ في بيانات الدفع"
             
-            # التحقق من صحة البيانات
-            if 'amount' not in payment_result[0] or payment_result[0]['amount'] is None:
-                return False, "خطأ في بيانات الدفع"
-            
-            # التحقق من الحد الأدنى للدفع
-            settings = self.get_game_settings()
-            last_payment = float(payment_result[0]['amount'])
-            min_amount = settings['min_payment_amount']
-            
-            if last_payment < min_amount:
-                return False, f"الحد الأدنى للدفع هو {min_amount} للعب"
-            
-            return True, last_payment
-            
+                # التحقق من الحد الأدنى للدفع
+                settings = self.get_game_settings()
+                last_payment = float(payment_data['amount'])
+                min_amount = settings['min_payment_amount']
+
+                if last_payment < min_amount:
+                    return False, f"الحد الأدنى للدفع هو {min_amount:.2f}"
+
+                return True, last_payment
+
+            except (IndexError, KeyError, TypeError, ValueError) as e:
+                logger.error(f"خطأ في معالجة بيانات الدفع: {str(e)}")
+                return False, "حدث خطأ في تحقق بيانات الدفع"
+
         except Exception as e:
             logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
             return False, "حدث خطأ في النظام"
@@ -909,24 +935,26 @@ class DiceGame:
         """تحديث إحصائيات اللعبة"""
         try:
             user_id_str = str(user_id)
-            
+
             # تحديث أو إدراج الإحصائيات
-            db_manager.execute_query("""
-                INSERT INTO dice_game_stats (user_id, plays_count, total_winnings, last_play_date, updated_at)
+            db_manager.execute_query(
+                """INSERT INTO dice_game_stats (user_id, plays_count, total_winnings, last_play_date, updated_at)
                 VALUES (%s, 1, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id) DO UPDATE SET 
+                ON CONFLICT (user_id) DO UPDATE SET
                     plays_count = dice_game_stats.plays_count + 1,
                     total_winnings = dice_game_stats.total_winnings + EXCLUDED.total_winnings,
                     last_play_date = EXCLUDED.last_play_date,
-                    updated_at = EXCLUDED.updated_at
-            """, (user_id_str, float(prize_amount)))
-            
+                    updated_at = EXCLUDED.updated_at""",
+                (user_id_str, float(prize_amount))
+        )
+
             # إضافة إلى سجل اللعب
-            db_manager.execute_query("""
-                INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (user_id_str, int(dice_value), float(last_payment_amount), float(prize_rate), float(prize_amount)))
-            
+            db_manager.execute_query(
+                """INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount)
+            VALUES (%s, %s, %s, %s, %s)""",
+                (user_id_str, int(dice_value), float(last_payment_amount), float(prize_rate), float(prize_amount))
+        )
+
         except Exception as e:
             logger.error(f"خطأ في تحديث إحصائيات اللعبة: {str(e)}")
     
@@ -935,18 +963,20 @@ class DiceGame:
         try:
             result = db_manager.execute_query(
                 "SELECT plays_count, total_winnings, last_play_date FROM dice_game_stats WHERE user_id = %s",
-                (str(user_id),)
-            )
-            
+                (str(user_id))
+        )
+
+            # معالجة محسنة للنتيجة
             if result and len(result) > 0:
                 stats = result[0]
                 return {
                     'plays_count': stats.get('plays_count', 0) or 0,
                     'total_winnings': float(stats.get('total_winnings', 0)) or 0.0,
                     'last_play_date': stats.get('last_play_date')
-                }
+            }
             else:
                 return {'plays_count': 0, 'total_winnings': 0.0, 'last_play_date': None}
+            
         except Exception as e:
             logger.error(f"خطأ في جلب إحصائيات المستخدم: {str(e)}")
             return {'plays_count': 0, 'total_winnings': 0.0, 'last_play_date': None}
@@ -956,23 +986,23 @@ class DiceGame:
         try:
             result = db_manager.execute_query(
                 "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
-                (str(user_id),)
-            )
-            
+                (str(user_id))
+        )
+
             if not result or len(result) == 0:
                 return 0
-                
+
             last_play_date = result[0].get('last_play_date')
             if not last_play_date:
                 return 0
-            
+
             settings = self.get_game_settings()
             cooldown_hours = settings['cooldown_hours']
             time_passed = (datetime.now() - last_play_date).total_seconds()
             time_remaining = (cooldown_hours * 3600) - time_passed
-            
+
             return max(0, time_remaining)
-            
+        
         except Exception as e:
             logger.error(f"خطأ في جلب وقت التبريد: {str(e)}")
             return 0
@@ -1277,56 +1307,49 @@ def start_edit_dice_prize(chat_id, dice_number):
 
 def get_wallet_balance(chat_id):
     """جلب رصيد محفظة المستخدم"""
-    try:
-        result = db_manager.execute_query(
-            'SELECT balance FROM wallets WHERE chat_id = %s',
-            (str(chat_id),)
-        )
-        
-        if result and len(result) > 0:
-            balance = result[0].get('balance')
-            # التحقق من وجود balance وأنه ليس None
-            if balance is not None:
-                return float(balance)
-        
-        # إذا لم يكن للمستخدم محفظة، إنشاء واحدة برصيد 0
-        db_manager.execute_query(
-            'INSERT INTO wallets (chat_id, balance) VALUES (%s, 0) ON CONFLICT (chat_id) DO NOTHING',
-            (str(chat_id),)
-        )
-        return 0.0
-        
-    except Exception as e:
-        logger.error(f"خطأ في جلب رصيد المحفظة: {str(e)}")
-        return 0.0
+    result = db_manager.execute_query(
+        'SELECT balance FROM wallets WHERE chat_id = %s',
+        (str(chat_id),)
+    )
+    if result and len(result) > 0:
+        balance = result[0]['balance']
+        # تحويل decimal إلى float
+        return float(balance) if balance is not None else 0.0
+    
+    # إذا لم يكن للمستخدم محفظة، إنشاء واحدة برصيد 0
+    db_manager.execute_query(
+        'INSERT INTO wallets (chat_id, balance) VALUES (%s, 0) ON CONFLICT (chat_id) DO NOTHING',
+        (str(chat_id),)
+    )
+    return 0.0
 
 def update_wallet_balance(chat_id, amount):
     """تحديث رصيد محفظة المستخدم"""
     try:
         current_balance = get_wallet_balance(chat_id)
         
-        # تحويل جميع القيم إلى float لتفادي مشكلة decimal
+        # تحويل جميع القيم إلى float لتجنب مشكلة decimal
         current_balance_float = float(current_balance)
         amount_float = float(amount)
         new_balance = current_balance_float + amount_float
         
         success = db_manager.execute_query(
             """INSERT INTO wallets (chat_id, balance) 
-            VALUES (%s, %s) 
-            ON CONFLICT (chat_id) 
-            DO UPDATE SET balance = EXCLUDED.balance, updated_at = CURRENT_TIMESTAMP""",
+               VALUES (%s, %s) 
+               ON CONFLICT (chat_id) 
+               DO UPDATE SET balance = EXCLUDED.balance, updated_at = CURRENT_TIMESTAMP""",
             (str(chat_id), new_balance)
         )
         
         if success:
-            logger.info(f"✔ تم تحديث رصيد المحفظة ({chat_id}): {current_balance} -> {new_balance}")
+            logger.info(f"تم تحديث رصيد المحفظة {chat_id}: {current_balance} -> {new_balance} ✔")
             return new_balance
         else:
-            logger.error(f"✗ فشل في تحديث رصيد المحفظة ({chat_id}): {current_balance}")
+            logger.error(f"فشل في تحديث رصيد المحفظة {chat_id}: {current_balance} ✘")
             return current_balance
             
     except Exception as e:
-        logger.error(f"✗ خطأ في تحديث رصيد المحفظة: {str(e)}")
+        logger.error(f"خطأ في تحديث رصيد المحفظة: {str(e)} ✘")
         return get_wallet_balance(chat_id)
 
 def load_accounts():
@@ -3381,6 +3404,27 @@ def handle_create_gift_code_uses(message):
         
     except ValueError:
         bot.send_message(chat_id, "❌ يرجى إدخال عدد صحيح")
+
+def safe_get_first_result(query_result, default_value=None):
+    """الحصول على أول نتيجة من استعلام بشكل آمن"""
+    try:
+        if not query_result or len(query_result) == 0:
+            return default_value
+        return query_result[0]
+    except (IndexError, TypeError):
+        return default_value
+
+def safe_get_value(data, key, default_value=None):
+    """الحصول على قيمة من قاموس بشكل آمن"""
+    try:
+        if not data or key not in data:
+            return default_value
+        return data[key]
+    except (KeyError, TypeError):
+        return default_value
+
+
+
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
