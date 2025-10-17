@@ -4986,31 +4986,31 @@ class EnhancedKeyboard:
         markup.add(types.InlineKeyboardButton("⛓️ رابط موقع 55BETS", url="https://www.55bets.net/"))
         # أزرار طرق السحب والدفع
         markup.row(
-            types.InlineKeyboardButton("  📤 سحب حوالة مالية  ", callback_data="withdraw_methods"),
-            types.InlineKeyboardButton("  📥 شحن محفظة البوت  ", callback_data="payment_methods")
+            types.InlineKeyboardButton("سحب حوالة مالية📤", callback_data="payment_methods"),
+            types.InlineKeyboardButton("شحن محفظة البوت 📥", callback_data="withdraw_methods")
         )
         
         # زر سجل الرصيد والإحالات
-        markup.add(types.InlineKeyboardButton("💳 سجل الرصيد", callback_data="balance_history"))
+        markup.add(types.InlineKeyboardButton(" سجل الرصيد💳", callback_data="balance_history"))
         
-        markup.add(types.InlineKeyboardButton("🛡️ التعويض الخاص", callback_data="compensation_section"),
-            types.InlineKeyboardButton("🎖 نقاط الامتياز", callback_data="loyalty_section"))
+        markup.add(types.InlineKeyboardButton(" التعويض الخاص🛡️", callback_data="compensation_section"),
+            types.InlineKeyboardButton(" نقاط الامتياز🎖", callback_data="loyalty_section"))
         
-        markup.add(types.InlineKeyboardButton("🎁 إهداء الرصيد", callback_data="gift_balance"),
-            types.InlineKeyboardButton("🎟 كود هدية", callback_data="gift_code"))
+        markup.add(types.InlineKeyboardButton(" كود هدية🎟", callback_data="gift_code"),
+            types.InlineKeyboardButton(" إهداء الرصيد🎁", callback_data="gift_balance"))
         
-        markup.add(types.InlineKeyboardButton("🎲 لعبة النرد", callback_data="dice_section"))
+        markup.add(types.InlineKeyboardButton(" لعبة النرد🎲", callback_data="dice_section"))
         
-        markup.add(types.InlineKeyboardButton("📞 التواصل مع الدعم", callback_data="contact_support"))
+        markup.add(types.InlineKeyboardButton(" التواصل مع الدعم💬", callback_data="contact_support"))
         
-        markup.add(types.InlineKeyboardButton("👥 نظام الإحالات", callback_data="referral_section"))
-        
-        
+        markup.add(types.InlineKeyboardButton("إحالة صديق 🤴🏻", callback_data="referral_section"))
         
         
-        markup.add(types.InlineKeyboardButton("🔄 استرداد آخر طلب سحب", callback_data="refund_last_withdrawal"),
-            types.InlineKeyboardButton("📋 سجل السحوبات", callback_data="withdraw_history"))
-        markup.add(types.InlineKeyboardButton("📜 الشروط والأحكام", callback_data="show_terms"))
+        
+        
+        markup.add(types.InlineKeyboardButton(" أسترداد رصيد حوالة🔄", callback_data="refund_last_withdrawal"),
+            types.InlineKeyboardButton(" سجل السحوبات🗂", callback_data="withdraw_history"))
+        markup.add(types.InlineKeyboardButton(" الشروط والأحكام🧾", callback_data="show_terms"))
         
         
         
