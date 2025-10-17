@@ -3010,43 +3010,62 @@ def update_user_cooldown(user_id):
     )
 
 def get_last_user_deposit(user_id):
-    """جلب آخر عملية إيداع للمستخدم"""
-    result = db_manager.execute_query(
-        "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
-        "ORDER BY created_at DESC LIMIT 1",
-        (str(user_id),)
-    )
-    if result and len(result) > 0:
-        return float(result[0]['amount'])
-    return 0
+    """جلب آخر عملية دفع ناجحة للمستخدم"""
+    try:
+        result = db_manager.execute_query(
+            "SELECT amount FROM payment_requests WHERE user_id = %s AND status = 'approved' "
+            "ORDER BY approved_at DESC LIMIT 1",
+            (str(user_id),)
+        )
+        
+        if result and len(result) > 0:
+            return float(result[0]['amount'])
+        
+        # إذا لم توجد عملية دفع ناجحة، نبحث في المعاملات كبديل
+        result = db_manager.execute_query(
+            "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (str(user_id),)
+        )
+        
+        if result and len(result) > 0:
+            return float(result[0]['amount'])
+            
+        return 0
+    except Exception as e:
+        logger.error(f"خطأ في جلب آخر عملية دفع: {str(e)}")
+        return 0
 
 def calculate_dice_reward(user_id, dice_value):
     """حساب الجائزة بناءً على قيمة النرد"""
     rewards = get_dice_rewards()
     reward_config = rewards.get(dice_value)
     
-    if not reward_config:
-        return 0, 'fixed'
+    if not reward_config or not reward_config.get('active', True):
+        return 0, 'none'
     
     reward_type = reward_config['reward_type']
     reward_value = reward_config['reward_value']
     
     if reward_type == 'fixed':
-        return reward_value, 'fixed'
+        return float(reward_value), 'fixed'
     
     elif reward_type == 'percentage':
         last_deposit = get_last_user_deposit(user_id)
-        calculated_reward = (last_deposit * reward_value) / 100
+        if last_deposit <= 0:
+            return 0, 'percentage'
+        
+        calculated_reward = (last_deposit * float(reward_value)) / 100
         return calculated_reward, 'percentage'
     
     elif reward_type == 'bonus':
         # جائزة الحظ السعيد - عشوائية بين 50% و 150% من القيمة الأساسية
         import random
         multiplier = random.uniform(0.5, 1.5)
-        calculated_reward = reward_value * multiplier
+        calculated_reward = float(reward_value) * multiplier
         return calculated_reward, 'bonus'
     
-    return 0, 'fixed'
+    return 0, 'none'
 
 def log_dice_play(user_id, dice_value, amount_paid, reward_type, reward_value, final_reward):
     """تسجيل لعبة النرد"""
