@@ -4993,8 +4993,9 @@ class EnhancedKeyboard:
         # زر سجل الرصيد والإحالات
         markup.add(types.InlineKeyboardButton(" سجل الرصيد💳", callback_data="balance_history"))
         
-        markup.add(types.InlineKeyboardButton(" التعويض الخاص🛡️", callback_data="compensation_section"),
-            types.InlineKeyboardButton(" نقاط الامتياز🎖", callback_data="loyalty_section"))
+        markup.add(
+            types.InlineKeyboardButton(" نقاط الامتياز🎖", callback_data="loyalty_section"),
+            types.InlineKeyboardButton(" التعويض الخاص🛡️", callback_data="compensation_section"))
         
         markup.add(types.InlineKeyboardButton(" كود هدية🎟", callback_data="gift_code"),
             types.InlineKeyboardButton(" إهداء الرصيد🎁", callback_data="gift_balance"))
