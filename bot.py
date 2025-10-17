@@ -2825,6 +2825,213 @@ def handle_create_gift_code_uses(message):
     except ValueError:
         bot.send_message(chat_id, "❌ يرجى إدخال عدد صحيح")
 # ===============================================================
+# نظام سجل السحوبات - دوال مستقلة
+# ===============================================================
+
+def get_user_withdraw_history(user_id, limit=20):
+    """جلب سجل السحوبات للمستخدم من قاعدة البيانات"""
+    try:
+        result = db_manager.execute_query(
+            "SELECT * FROM pending_withdrawals WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            (str(user_id), limit)
+        )
+        return result if result else []
+    except Exception as e:
+        logger.error(f"خطأ في جلب سجل السحوبات: {str(e)}")
+        return []
+
+def get_all_user_withdrawals(user_id):
+    """جلب جميع سحوبات المستخدم بجميع حالاتها"""
+    try:
+        result = db_manager.execute_query(
+            "SELECT * FROM pending_withdrawals WHERE user_id = %s ORDER BY created_at DESC",
+            (str(user_id),)
+        )
+        return result if result else []
+    except Exception as e:
+        logger.error(f"خطأ في جلب جميع السحوبات: {str(e)}")
+        return []
+
+def format_withdraw_status(status):
+    """تنسيق حالة السحب"""
+    status_map = {
+        'pending': '⏳ قيد الانتظار',
+        'completed': '✅ مكتمل',
+        'refunded': '🔄 مسترد',
+        'rejected': '❌ مرفوض'
+    }
+    return status_map.get(status, status)
+
+def format_withdraw_history_text(withdrawals):
+    """تنسيق نص سجل السحوبات"""
+    if not withdrawals:
+        return "❌ لا توجد عمليات سحب سابقة"
+    
+    text = "📋 <b>سجل عمليات السحب</b>\n\n"
+    
+    for i, withdrawal in enumerate(withdrawals, 1):
+        method_id = withdrawal['method_id']
+        method_name = withdraw_system.methods.get(method_id, {}).get('name', 'غير معروف')
+        amount = withdrawal['amount']
+        status = format_withdraw_status(withdrawal['status'])
+        date = withdrawal['created_at'].strftime('%Y-%m-%d %H:%M')
+        
+        text += f"<b>عملية #{i}</b>\n"
+        text += f"💳 <b>الطريقة:</b> {method_name}\n"
+        text += f"💰 <b>المبلغ:</b> {float(amount):.2f}\n"
+        text += f"📮 <b>الحالة:</b> {status}\n"
+        text += f"📅 <b>التاريخ:</b> {date}\n"
+        
+        if withdrawal.get('completed_at'):
+            completed_date = withdrawal['completed_at'].strftime('%Y-%m-%d %H:%M')
+            text += f"⏱️ <b>وقت الإكمال:</b> {completed_date}\n"
+        
+        text += "─" * 20 + "\n"
+    
+    return text
+
+def show_withdraw_history(chat_id, message_id=None):
+    """عرض سجل السحوبات للمستخدم"""
+    try:
+        # جلب سجل السحوبات
+        withdrawals = get_user_withdraw_history(chat_id, 15)
+        
+        # تنسيق النص
+        text = format_withdraw_history_text(withdrawals)
+        
+        # إنشاء أزرار التحكم
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("🔄 تحديث", callback_data="withdraw_history"),
+            types.InlineKeyboardButton("📊 إحصائيات", callback_data="withdraw_stats")
+        )
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        
+        # إرسال أو تعديل الرسالة
+        if message_id:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup
+            )
+        else:
+            bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup
+            )
+            
+    except Exception as e:
+        logger.error(f"خطأ في عرض سجل السحوبات: {str(e)}")
+        error_text = "❌ حدث خطأ في جلب سجل السحوبات. يرجى المحاولة لاحقاً."
+        if message_id:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=error_text,
+                parse_mode="HTML"
+            )
+        else:
+            bot.send_message(chat_id, error_text, parse_mode="HTML")
+
+def show_withdraw_stats(chat_id, message_id):
+    """عرض إحصائيات السحوبات للمستخدم"""
+    try:
+        # جلب جميع سحوبات المستخدم
+        all_withdrawals = get_all_user_withdrawals(chat_id)
+        
+        if not all_withdrawals:
+            text = "📊 <b>إحصائيات السحوبات</b>\n\n❌ لا توجد عمليات سحب سابقة"
+        else:
+            # حساب الإحصائيات
+            total_withdrawals = len(all_withdrawals)
+            total_amount = sum(float(w['amount']) for w in all_withdrawals)
+            completed_count = len([w for w in all_withdrawals if w['status'] == 'completed'])
+            pending_count = len([w for w in all_withdrawals if w['status'] == 'pending'])
+            refunded_count = len([w for w in all_withdrawals if w['status'] == 'refunded'])
+            
+            # أول وآخر سحب
+            first_withdraw = min(all_withdrawals, key=lambda x: x['created_at'])
+            last_withdraw = max(all_withdrawals, key=lambda x: x['created_at'])
+            
+            text = "📊 <b>إحصائيات السحوبات</b>\n\n"
+            text += f"📈 <b>إجمالي العمليات:</b> {total_withdrawals}\n"
+            text += f"💰 <b>إجمالي المبالغ:</b> {total_amount:.2f}\n"
+            text += f"✅ <b>العمليات المكتملة:</b> {completed_count}\n"
+            text += f"⏳ <b>العمليات المعلقة:</b> {pending_count}\n"
+            text += f"🔄 <b>العمليات المستردة:</b> {refunded_count}\n"
+            text += f"📅 <b>أول عملية:</b> {first_withdraw['created_at'].strftime('%Y-%m-%d')}\n"
+            text += f"📅 <b>آخر عملية:</b> {last_withdraw['created_at'].strftime('%Y-%m-%d')}\n"
+            
+            if completed_count > 0:
+                avg_amount = total_amount / completed_count
+                text += f"📊 <b>متوسط المبلغ:</b> {avg_amount:.2f}\n"
+        
+        # أزرار التحكم
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("📋 السجل الكامل", callback_data="withdraw_history"),
+            types.InlineKeyboardButton("🔄 تحديث", callback_data="withdraw_stats")
+        )
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+        
+    except Exception as e:
+        logger.error(f"خطأ في عرض إحصائيات السحوبات: {str(e)}")
+        bot.answer_callback_query(
+            chat_id,
+            "❌ حدث خطأ في جلب الإحصائيات",
+            show_alert=True
+        )
+
+def export_withdraw_history(user_id):
+    """تصدير سجل السحوبات كملف CSV (للمستخدمين المتقدمين)"""
+    try:
+        withdrawals = get_all_user_withdrawals(user_id)
+        
+        if not withdrawals:
+            return False, "لا توجد بيانات للتصدير"
+        
+        # إنشاء ملف CSV
+        csv_data = "رقم العملية,الطريقة,المبلغ,الحالة,التاريخ,وقت الإكمال\n"
+        
+        for withdrawal in withdrawals:
+            method_id = withdrawal['method_id']
+            method_name = withdraw_system.methods.get(method_id, {}).get('name', 'غير معروف')
+            
+            csv_data += f"{withdrawal['withdrawal_id']},{method_name},{withdrawal['amount']},"
+            csv_data += f"{withdrawal['status']},{withdrawal['created_at'].strftime('%Y-%m-%d %H:%M')},"
+            csv_data += f"{withdrawal['completed_at'].strftime('%Y-%m-%d %H:%M') if withdrawal['completed_at'] else 'N/A'}\n"
+        
+        return True, csv_data
+        
+    except Exception as e:
+        logger.error(f"خطأ في تصدير سجل السحوبات: {str(e)}")
+        return False, "حدث خطأ أثناء التصدير"
+
+def search_withdrawals_by_date(user_id, start_date, end_date):
+    """بحث في السحوبات حسب التاريخ"""
+    try:
+        result = db_manager.execute_query(
+            "SELECT * FROM pending_withdrawals WHERE user_id = %s AND created_at BETWEEN %s AND %s ORDER BY created_at DESC",
+            (str(user_id), start_date, end_date)
+        )
+        return result if result else []
+    except Exception as e:
+        logger.error(f"خطأ في البحث في السحوبات: {str(e)}")
+        return []
+
+# ===============================================================
 # دوال نظام الإحالات
 # ===============================================================
 
@@ -3750,7 +3957,8 @@ class EnhancedKeyboard:
         
         
         
-        markup.add(types.InlineKeyboardButton("🔄 استرداد آخر طلب سحب", callback_data="refund_last_withdrawal"))
+        markup.add(types.InlineKeyboardButton("🔄 استرداد آخر طلب سحب", callback_data="refund_last_withdrawal"),
+            types.InlineKeyboardButton("📋 سجل السحوبات", callback_data="withdraw_history"))
         markup.add(types.InlineKeyboardButton("📜 الشروط والأحكام", callback_data="show_terms"))
         
         
@@ -4937,6 +5145,14 @@ def handle_callbacks(call):
                 handle_revoke_gift_code(call, usage_id)
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية", show_alert=True)
+        
+        # في قسم handle_callbacks - إضافة المعالج الجديد
+        elif call.data == "withdraw_history":
+            show_withdraw_history(chat_id, message_id)
+
+        elif call.data == "withdraw_stats":
+            show_withdraw_stats(chat_id, message_id)
+        
         
     except Exception as e:
         logger.error(f"❌ خطأ في المعالجة: {e}")
@@ -8158,6 +8374,7 @@ def start_system():
 
 if __name__ == "__main__":
     start_system()
+
 
 
 
