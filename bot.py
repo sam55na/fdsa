@@ -2945,16 +2945,17 @@ def get_dice_rewards():
             }
     return rewards
 
-def save_dice_reward(dice_value, reward_type, reward_value, description):
-    """حفظ/تحديث جائزة النرد"""
+def save_dice_reward(dice_value, reward_type, reward_value, description, active=True):
+    """حفظ أو تحديث جائزة النرد"""
     return db_manager.execute_query(
-        "INSERT INTO dice_rewards (dice_value, reward_type, reward_value, description) "
-        "VALUES (%s, %s, %s, %s) "
+        "INSERT INTO dice_rewards (dice_value, reward_type, reward_value, description, active) "
+        "VALUES (%s, %s, %s, %s, %s) "
         "ON CONFLICT (dice_value) DO UPDATE SET "
         "reward_type = EXCLUDED.reward_type, "
         "reward_value = EXCLUDED.reward_value, "
-        "description = EXCLUDED.description",
-        (dice_value, reward_type, reward_value, description)
+        "description = EXCLUDED.description, "
+        "active = EXCLUDED.active",
+        (dice_value, reward_type, reward_value, description, active)
     )
 
 def toggle_dice_reward(dice_value, active):
@@ -3514,24 +3515,42 @@ def show_dice_rewards_management(chat_id, message_id):
     
     text = "<b>إدارة جوائز النرد</b>\n\n"
     
-    if rewards:
-        for dice_value in range(1, 7):
-            reward = rewards.get(dice_value)
-            if reward:
-                status = "✅ مفعل" if reward['active'] else "❌ معطل"
-                text += f"<b>الرقم {dice_value}:</b>\n"
-                text += f"النوع: {reward['reward_type']}\n"
-                text += f"القيمة: {reward['reward_value']}\n"
-                text += f"الحالة: {status}\n\n"
-    else:
-        text += "❌ لا توجد جوائز مضافة\n\n"
+    for dice_value in range(1, 7):
+        reward = rewards.get(dice_value)
+        if reward and reward['active']:
+            reward_type_text = {
+                'fixed': '💰 مبلغ ثابت',
+                'percentage': '📊 نسبة إيداع', 
+                'bonus': '🎲 حظ أوفر'
+            }.get(reward['reward_type'], reward['reward_type'])
+            
+            text += f"<b>الرقم {dice_value}:</b> {reward_type_text}\n"
+            text += f"القيمة: {reward['reward_value']}\n"
+            text += f"الوصف: {reward['description'] or 'لا يوجد'}\n\n"
+        else:
+            text += f"<b>الرقم {dice_value}:</b> ❌ غير مفعل\n\n"
     
-    text += "اختر الإجراء المطلوب:"
+    text += "اختر الرقم لتعديل جائزته:"
     
     markup = types.InlineKeyboardMarkup()
+    
+    # صفوف الأرقام
+    for i in range(0, 6, 3):
+        row_buttons = []
+        for j in range(3):
+            if i + j + 1 <= 6:
+                dice_num = i + j + 1
+                reward = rewards.get(dice_num)
+                emoji = "✅" if reward and reward['active'] else "❌"
+                row_buttons.append(types.InlineKeyboardButton(
+                    f"{emoji} {dice_num}", 
+                    callback_data=f"edit_dice_reward_{dice_num}"
+                ))
+        markup.row(*row_buttons)
+    
     markup.row(
         types.InlineKeyboardButton("🔄 تحديث", callback_data="manage_dice_rewards"),
-        types.InlineKeyboardButton("➕ إضافة جائزة", callback_data="add_dice_reward")
+        types.InlineKeyboardButton("📊 الإحصائيات", callback_data="dice_admin_stats")
     )
     markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
     
@@ -3608,7 +3627,219 @@ def show_dice_admin_stats(chat_id, message_id):
         logger.error(f"خطأ في عرض إحصائيات النرد: {str(e)}")
         bot.answer_callback_query(chat_id, "حدث خطأ في جلب الإحصائيات", show_alert=True)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('edit_dice_reward_'))
+def handle_edit_dice_reward(call):
+    chat_id = str(call.message.chat.id)
+    if not is_admin(chat_id):
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    
+    dice_value = int(call.data.replace('edit_dice_reward_', ''))
+    
+    rewards = get_dice_rewards()
+    current_reward = rewards.get(dice_value)
+    
+    text = f"<b>تعديل جائزة الرقم {dice_value}</b>\n\n"
+    
+    if current_reward:
+        reward_type_text = {
+            'fixed': 'مبلغ ثابت',
+            'percentage': 'نسبة من آخر إيداع', 
+            'bonus': 'حظ أوفر (عشوائي)'
+        }.get(current_reward['reward_type'], current_reward['reward_type'])
+        
+        text += f"<b>الجائزة الحالية:</b>\n"
+        text += f"النوع: {reward_type_text}\n"
+        text += f"القيمة: {current_reward['reward_value']}\n"
+        text += f"الوصف: {current_reward['description'] or 'لا يوجد'}\n"
+        text += f"الحالة: {'✅ مفعل' if current_reward['active'] else '❌ معطل'}\n\n"
+    else:
+        text += "❌ لا توجد جائزة مضافة لهذا الرقم\n\n"
+    
+    text += "اختر نوع الجائزة الجديدة:"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("💰 مبلغ ثابت", callback_data=f"dice_fixed_{dice_value}"),
+        types.InlineKeyboardButton("📊 نسبة من إيداع", callback_data=f"dice_percentage_{dice_value}")
+    )
+    markup.row(
+        types.InlineKeyboardButton("🎲 حظ أوفر", callback_data=f"dice_bonus_{dice_value}"),
+        types.InlineKeyboardButton("❌ تعطيل", callback_data=f"dice_disable_{dice_value}")
+    )
+    
+    if current_reward and current_reward['active']:
+        markup.row(types.InlineKeyboardButton("✅ إلغاء التعطيل", callback_data=f"dice_enable_{dice_value}"))
+    
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="manage_dice_rewards"))
+    
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=call.message.message_id,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dice_fixed_'))
+def handle_dice_fixed(call):
+    chat_id = str(call.message.chat.id)
+    dice_value = int(call.data.replace('dice_fixed_', ''))
+    
+    user_data[chat_id] = {
+        'state': 'dice_fixed_amount',
+        'dice_value': dice_value,
+        'reward_type': 'fixed'
+    }
+    
+    bot.send_message(
+        chat_id,
+        f"<b>جائزة مبلغ ثابت للرقم {dice_value}</b>\n\n"
+        "أرسل المبلغ الثابت:\n"
+        "<em>مثال: 50</em>",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button(f"edit_dice_reward_{dice_value}")
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dice_percentage_'))
+def handle_dice_percentage(call):
+    chat_id = str(call.message.chat.id)
+    dice_value = int(call.data.replace('dice_percentage_', ''))
+    
+    user_data[chat_id] = {
+        'state': 'dice_percentage_amount', 
+        'dice_value': dice_value,
+        'reward_type': 'percentage'
+    }
+    
+    bot.send_message(
+        chat_id,
+        f"<b>جائزة نسبة من آخر إيداع للرقم {dice_value}</b>\n\n"
+        "أرسل النسبة المئوية:\n"
+        "<em>مثال: 10 (لـ 10% من آخر إيداع)</em>",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button(f"edit_dice_reward_{dice_value}")
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dice_bonus_'))
+def handle_dice_bonus(call):
+    chat_id = str(call.message.chat.id)
+    dice_value = int(call.data.replace('dice_bonus_', ''))
+    
+    user_data[chat_id] = {
+        'state': 'dice_bonus_amount',
+        'dice_value': dice_value, 
+        'reward_type': 'bonus'
+    }
+    
+    bot.send_message(
+        chat_id,
+        f"<b>جائزة حظ أوفر للرقم {dice_value}</b>\n\n"
+        "أرسل القيمة الأساسية (سيتم ضربها بعشوائية بين 0.5 و 1.5):\n"
+        "<em>مثال: 100 (قد يحصل على 50 أو 150 أو أي قيمة بينهما)</em>",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button(f"edit_dice_reward_{dice_value}")
+    )
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dice_disable_'))
+def handle_dice_disable(call):
+    chat_id = str(call.message.chat.id)
+    dice_value = int(call.data.replace('dice_disable_', ''))
+    
+    if toggle_dice_reward(dice_value, False):
+        bot.answer_callback_query(call.id, f"✅ تم تعطيل جائزة الرقم {dice_value}")
+    else:
+        bot.answer_callback_query(call.id, "❌ فشل في التعطيل", show_alert=True)
+    
+    handle_edit_dice_reward(call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dice_enable_'))
+def handle_dice_enable(call):
+    chat_id = str(call.message.chat.id)
+    dice_value = int(call.data.replace('dice_enable_', ''))
+    
+    if toggle_dice_reward(dice_value, True):
+        bot.answer_callback_query(call.id, f"✅ تم تفعيل جائزة الرقم {dice_value}")
+    else:
+        bot.answer_callback_query(call.id, "❌ فشل في التفعيل", show_alert=True)
+    
+    handle_edit_dice_reward(call)
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'dice_fixed_amount')
+def handle_dice_fixed_amount(message):
+    chat_id = str(message.chat.id)
+    try:
+        amount = float(message.text.strip())
+        if amount <= 0:
+            bot.send_message(chat_id, "يجب أن يكون المبلغ أكبر من 0")
+            return
+        
+        dice_value = user_data[chat_id]['dice_value']
+        description = f"مبلغ ثابت: {amount}"
+        
+        if save_dice_reward(dice_value, 'fixed', amount, description):
+            bot.send_message(chat_id, f"✅ تم حفظ جائزة مبلغ ثابت {amount} للرقم {dice_value}")
+        else:
+            bot.send_message(chat_id, "❌ فشل في حفظ الجائزة")
+        
+        # تنظيف البيانات والعودة
+        if chat_id in user_data:
+            del user_data[chat_id]
+        show_dice_rewards_management(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'dice_percentage_amount')
+def handle_dice_percentage_amount(message):
+    chat_id = str(message.chat.id)
+    try:
+        percentage = float(message.text.strip())
+        if percentage <= 0 or percentage > 100:
+            bot.send_message(chat_id, "يجب أن تكون النسبة بين 0 و 100")
+            return
+        
+        dice_value = user_data[chat_id]['dice_value']
+        description = f"نسبة {percentage}% من آخر إيداع"
+        
+        if save_dice_reward(dice_value, 'percentage', percentage, description):
+            bot.send_message(chat_id, f"✅ تم حفظ جائزة نسبة {percentage}% للرقم {dice_value}")
+        else:
+            bot.send_message(chat_id, "❌ فشل في حفظ الجائزة")
+        
+        # تنظيف البيانات والعودة
+        if chat_id in user_data:
+            del user_data[chat_id]
+        show_dice_rewards_management(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'dice_bonus_amount')
+def handle_dice_bonus_amount(message):
+    chat_id = str(message.chat.id)
+    try:
+        base_amount = float(message.text.strip())
+        if base_amount <= 0:
+            bot.send_message(chat_id, "يجب أن يكون المبلغ أكبر من 0")
+            return
+        
+        dice_value = user_data[chat_id]['dice_value']
+        description = f"جائزة حظ أوفر بقيمة أساسية {base_amount}"
+        
+        if save_dice_reward(dice_value, 'bonus', base_amount, description):
+            bot.send_message(chat_id, f"✅ تم حفظ جائزة حظ أوفر للرقم {dice_value}")
+        else:
+            bot.send_message(chat_id, "❌ فشل في حفظ الجائزة")
+        
+        # تنظيف البيانات والعودة
+        if chat_id in user_data:
+            del user_data[chat_id]
+        show_dice_rewards_management(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -6018,6 +6249,47 @@ def handle_callbacks(call):
                 toggle_dice_system(chat_id, message_id)
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        
+        
+        elif call.data.startswith("edit_dice_reward_"):
+            if is_admin(chat_id):
+                handle_edit_dice_reward(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data.startswith("dice_fixed_"):
+            if is_admin(chat_id):
+                handle_dice_fixed(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data.startswith("dice_percentage_"):
+            if is_admin(chat_id):
+                handle_dice_percentage(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data.startswith("dice_bonus_"):
+            if is_admin(chat_id):
+                handle_dice_bonus(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data.startswith("dice_disable_"):
+            if is_admin(chat_id):
+                handle_dice_disable(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data.startswith("dice_enable_"):
+            if is_admin(chat_id):
+                handle_dice_enable(call)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        
+        
+        
+        
         
         
     except Exception as e:
