@@ -5512,9 +5512,9 @@ def show_rewards_management(chat_id, message_id):
         for reward_id, reward in rewards.items():
             status = "✅ مفعل" if reward['active'] else "❌ معطل"
             text += f"<b>{reward['name']}</b>\n"
-            text += f"<blockquote>   التكلفة: {reward['points_cost']}♞\n"
+            text += f"   التكلفة: {reward['points_cost']}♞\n"
             text += f"   الخصم: {reward['discount_rate']}%\n"
-            text += f"   الحالة: {status}\n\n</blockquote>"
+            text += f"   الحالة: {status}\n\n"
     else:
         text += "لا توجد جوائز\n"
     
@@ -6541,11 +6541,11 @@ def show_loyalty_redeem(chat_id, message_id):
         if discount > 0:
             final_cost = original_cost * (1 - discount/100)
             final_cost = int(final_cost)
-            text += f"☑️ {reward['name']}\n"
-            text += f"   التكلفة: {original_cost:,}♞ {final_cost:,}♞ (خصم {discount}%)\n\n"
+            text += f"<blockquote>☑️ {reward['name']}\n"
+            text += f"   التكلفة: {original_cost:,}♞ {final_cost:,}♞ (خصم {discount}%)\n\n</blockquote>"
         else:
-            text += f"☑️ {reward['name']}\n"
-            text += f"   التكلفة: {original_cost:,}♞\n\n"
+            text += f"<blockquote>☑️ {reward['name']}\n"
+            text += f"   التكلفة: {original_cost:,}♞\n\n</blockquote>"
     
     markup = types.InlineKeyboardMarkup()
     
