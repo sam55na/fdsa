@@ -757,7 +757,18 @@ class DatabaseManager:
             self.connect_with_retry()
         except Exception as e:
             logger.error(f"❌ خطأ في إعادة الاتصال: {str(e)}")
-
+            
+            
+    def safe_fetch_one(self, query, params=None):
+        """جلب سجل واحد بشكل آمن مع معالجة الأخطاء"""
+        try:
+            result = self.execute_query(query, params)
+            if result and isinstance(result, list) and len(result) > 0:
+                return result[0]
+            return {}  # إرجاع قاموس فارغ بدلاً من None
+        except Exception as e:
+            logger.error(f"❌ خطأ في safe_fetch_one: {str(e)}")
+            return {}
 # إنشاء مدير قاعدة البيانات
 db_manager = DatabaseManager()
 
@@ -807,43 +818,43 @@ class DiceGame:
         try:
             user_id_str = str(user_id)
 
-            # التحقق من آخر مرة لعب
-            result = db_manager.execute_query(
+            # التحقق من آخر مرة لعب - باستخدام الطريقة الآمنة
+            result = db_manager.safe_fetch_one(
                 "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
                 (user_id_str,)
         )
 
-            if result and len(result) > 0:
-                last_play_date = result[0].get('last_play_date')
-                if last_play_date:
-                    settings = self.get_game_settings()
-                    cooldown_hours = settings['cooldown_hours']
+            if result and result.get('last_play_date'):
+                last_play_date = result['last_play_date']
+                settings = self.get_game_settings()
+                cooldown_hours = settings['cooldown_hours']
 
-                    time_passed = (datetime.now() - last_play_date).total_seconds()
-                    if time_passed < cooldown_hours * 3600:
-                        remaining_time = (cooldown_hours * 3600) - time_passed
-                        hours = int(remaining_time // 3600)
-                        minutes = int((remaining_time % 3600) // 60)
-                        return False, f"⏳ يمكنك اللعب بعد {hours:02d}:{minutes:02d}"
+                time_passed = (datetime.now() - last_play_date).total_seconds()
+                if time_passed < cooldown_hours * 3600:
+                    remaining_time = (cooldown_hours * 3600) - time_passed
+                    hours = int(remaining_time // 3600)
+                    minutes = int((remaining_time % 3600) // 60)
+                    return False, f"⏳ يمكنك اللعب بعد {hours:02d}:{minutes:02d}"
 
-            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة - الإصلاح هنا
-            payment_result = db_manager.execute_query(
+            # التحقق من عملية الدفع - الطريقة الآمنة
+            payment_result = db_manager.safe_fetch_one(
                 "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
                 "AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 1",
                 (user_id_str,)
         )
 
-            # التحقق من وجود النتائج بشكل صحيح
-            if not payment_result or len(payment_result) == 0:
+            # التحقق الآمن للنتيجة
+            if not payment_result or payment_result.get('amount') is None:
                 return False, "❌ يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
 
-            # التحقق من صحة البيانات بشكل آمن
-            if len(payment_result) == 0 or 'amount' not in payment_result[0] or payment_result[0]['amount'] is None:
-                return False, "❌ خطأ في بيانات الدفع"
+            # التحقق من صحة المبلغ
+            try:
+                last_payment = float(payment_result['amount'])
+            except (ValueError, TypeError):
+                return False, "❌ خطأ في بيانات الدفع - المبلغ غير صالح"
 
             # التحقق من الحد الأدنى للدفع
             settings = self.get_game_settings()
-            last_payment = float(payment_result[0]['amount'])
             min_amount = settings['min_payment_amount']
 
             if last_payment < min_amount:
@@ -852,7 +863,7 @@ class DiceGame:
             return True, last_payment
 
         except Exception as e:
-            logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
+            logger.error(f"❌ خطأ في التحقق من إمكانية اللعب: {str(e)}")
             return False, "❌ حدث خطأ في النظام"
     
     def play_dice_game(self, user_id, last_payment_amount):
@@ -3396,6 +3407,11 @@ def handle_create_gift_code_uses(message):
         
     except ValueError:
         bot.send_message(chat_id, "❌ يرجى إدخال عدد صحيح")
+
+
+
+
+
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
