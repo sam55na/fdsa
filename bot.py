@@ -3137,11 +3137,6 @@ def show_dice_section(chat_id, message_id):
 """
 
     markup = types.InlineKeyboardMarkup()
-    if can_play and settings.get('dice_enabled') == 'true':
-        
-    else:
-        if not has_qualifying_payment:
-            markup.add(types.InlineKeyboardButton("💳 إيداع رصيد", callback_data="payment_methods"))
     
     markup.add(types.InlineKeyboardButton("📊 الجوائز", callback_data="dice_rewards"))
     markup.add(types.InlineKeyboardButton("📈 الإحصائيات", callback_data="dice_stats"))
