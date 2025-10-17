@@ -710,6 +710,17 @@ class DatabaseManager:
                 ON CONFLICT (setting_key) DO NOTHING
 """)
 
+                
+                cursor.execute("""
+                    CREATE TABLE user_titles (
+                        user_id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+""")
+                
+                
                 # إدخال الجوايز الافتراضية
                 default_rewards = [
                     (1, 'fixed', '50', 'جائزة ثابتة للرقم 1'),
@@ -3859,6 +3870,88 @@ def handle_dice_bonus_amount(message):
         
     except ValueError:
         bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+def get_user_title(user_id):
+    """جلب لقب المستخدم"""
+    result = db_manager.execute_query(
+        'SELECT title FROM user_titles WHERE user_id = %s',
+        (str(user_id),)
+    )
+    if result and len(result) > 0:
+        return result[0]['title']
+    return None
+
+def set_user_title(user_id, title):
+    """تعيين لقب المستخدم"""
+    success = db_manager.execute_query(
+        'INSERT INTO user_titles (user_id, title) VALUES (%s, %s) '
+        'ON CONFLICT (user_id) DO UPDATE SET title = EXCLUDED.title, updated_at = CURRENT_TIMESTAMP',
+        (str(user_id), title)
+    )
+    return success
+
+def has_user_title(user_id):
+    """التحقق إذا كان المستخدم لديه لقب"""
+    result = db_manager.execute_query(
+        'SELECT 1 FROM user_titles WHERE user_id = %s',
+        (str(user_id),)
+    )
+    return bool(result and len(result) > 0)
+
+
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'set_user_title')
+def handle_user_title_input(message):
+    chat_id = str(message.chat.id)
+    title = message.text.strip()
+    
+    if not title or len(title) < 2:
+        bot.send_message(
+            chat_id,
+            "<b>يرجى إدخال لقب صحيح (حرفين على الأقل)</b>",
+            parse_mode="HTML"
+        )
+        return
+    
+    if len(title) > 20:
+        bot.send_message(
+            chat_id,
+            "<b>يرجى إدخال لقب أقصر (20 حرف كحد أقصى)</b>",
+            parse_mode="HTML"
+        )
+        return
+    
+    # حفظ اللقب
+    if set_user_title(chat_id, title):
+        # تنظيف البيانات
+        if chat_id in user_data:
+            del user_data[chat_id]
+        
+        bot.send_message(
+            chat_id,
+            f"<b>تم حفظ لقبك بنجاح! 👑</b>\n\n"
+            f"مرحباً بك <b>{title}</b> في عالم النخبة",
+            parse_mode="HTML"
+        )
+        
+        # معالجة الإحالات بعد تعيين اللقب
+        if len(message.text.split()) > 1:
+            referral_code = message.text.split()[1]
+            if referral_code.startswith('ref_'):
+                referrer_id = referral_code.replace('ref_', '')
+                if referrer_id != chat_id:
+                    add_referral(referrer_id, chat_id)
+        
+        # عرض القائمة الرئيسية
+        show_main_menu(chat_id)
+    else:
+        bot.send_message(
+            chat_id,
+            "<b>حدث خطأ في حفظ اللقب، يرجى المحاولة مرة أخرى</b>",
+            parse_mode="HTML"
+        )
+
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -5524,6 +5617,18 @@ def start(message):
             reply_markup=markup
         )
         return
+    
+    if not has_user_title(chat_id):
+        user_data[chat_id] = {'state': 'set_user_title'}
+        bot.send_message(
+            chat_id,
+            "<b>مرحباً بك! 👋</b>\n\n"
+            "قبل البدء، يرجى إدخال لقبك الذي تريد أن نناديك به:\n"
+            "<em>  مرحبا بك مجددا</em>",
+            parse_mode="HTML"
+        )
+        return
+    
     if len(message.text.split()) > 1:
         referral_code = message.text.split()[1]
         if referral_code.startswith('ref_'):
@@ -6307,7 +6412,8 @@ def handle_callbacks(call):
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
         
-        
+        elif call.data == "main_menu":
+            show_main_menu(chat_id, message_id)
         
         
         
@@ -6950,25 +7056,64 @@ def handle_export_points_data(call):
 # دوال الواجهة الرئيسية
 # ===============================================================
 
-def show_main_menu(chat_id, message_id):
-    accounts = load_accounts()
-    has_account = str(chat_id) in accounts
-    
+def show_main_menu(chat_id, message_id=None):
+    """عرض القائمة الرئيسية المحدثة"""
     try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text="<b>القائمة الرئيسية</b>\n\nاختر من الخيارات:",
-            parse_mode="HTML",
-            reply_markup=EnhancedKeyboard.create_main_menu(has_account, is_admin(chat_id))
+        # جلب بيانات المستخدم
+        user_title = get_user_title(chat_id)
+        wallet_balance = get_wallet_balance(chat_id)
+        loyalty_points = get_loyalty_points(chat_id)
+        
+        # نص الترحيب المحدث
+        welcome_text = (
+            f"<b>👋 اهلا بك {user_title} في عالم النخبة</b>\n\n"
+            f"💰 <b>رصيدك في البوت:</b> {wallet_balance:.2f}\n"
+            f"💎 <b>نقاط الامتياز:</b> {loyalty_points}\n\n"
+            f"<b>اختر من القائمة:</b>"
         )
-    except:
-        bot.send_message(
-            chat_id,
-            "<b>القائمة الرئيسية</b>\n\nاختر من الخيارات:",
-            parse_mode="HTML",
-            reply_markup=EnhancedKeyboard.create_main_menu(has_account, is_admin(chat_id))
-        )
+        
+        accounts = load_accounts()
+        has_account = str(chat_id) in accounts
+        
+        markup = EnhancedKeyboard.create_main_menu(has_account, is_admin(chat_id))
+        
+        if message_id:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=welcome_text,
+                parse_mode="HTML",
+                reply_markup=markup
+            )
+        else:
+            bot.send_message(
+                chat_id,
+                welcome_text,
+                parse_mode="HTML",
+                reply_markup=markup
+            )
+            
+    except Exception as e:
+        logger.error(f"خطأ في عرض القائمة الرئيسية: {str(e)}")
+        # نسخة احتياطية في حالة الخطأ
+        try:
+            if message_id:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="<b>مرحباً بك في البوت</b>\n\nاختر من القائمة:",
+                    parse_mode="HTML",
+                    reply_markup=EnhancedKeyboard.create_main_menu(False, is_admin(chat_id))
+                )
+            else:
+                bot.send_message(
+                    chat_id,
+                    "<b>مرحباً بك في البوت</b>\n\nاختر من القائمة:",
+                    parse_mode="HTML",
+                    reply_markup=EnhancedKeyboard.create_main_menu(False, is_admin(chat_id))
+                )
+        except:
+            pass
 
 def show_account_section(chat_id, message_id):
     accounts = load_accounts()
