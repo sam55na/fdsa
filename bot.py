@@ -656,6 +656,34 @@ class DatabaseManager:
                     amount_received DECIMAL(15, 2) NOT NULL
 )
 """)
+                # جدول إحصائيات لعبة النرد
+                cursor.execute("""
+                CREATE TABLE dice_game_stats (
+                    user_id TEXT NOT NULL,
+                    plays_count INTEGER DEFAULT 0,
+                    total_winnings DECIMAL(15, 2) DEFAULT 0,
+                    last_play_date TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id)
+)
+""")
+
+                # جدول سجل لعب النرد
+                cursor.execute("""
+                CREATE TABLE dice_game_history (
+                    play_id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    dice_value INTEGER NOT NULL,
+                    last_payment_amount DECIMAL(15, 2) NOT NULL,
+                    prize_rate DECIMAL(5, 4) NOT NULL,
+                    prize_amount DECIMAL(15, 2) NOT NULL,
+                    play_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+                
+                
+                
                 
                 
                 # إدخال الجوائز الافتراضية
@@ -720,6 +748,548 @@ class DatabaseManager:
 
 # إنشاء مدير قاعدة البيانات
 db_manager = DatabaseManager()
+
+
+
+# ===============================================================
+# نظام لعبة النرد
+# ===============================================================
+
+class DiceGame:
+    def __init__(self):
+        self.last_play_times = {}
+        
+        # إعدادات اللعبة الافتراضية
+        self.default_settings = {
+            'min_payment_amount': 100.0,
+            'prizes': {
+                1: 0.1,   # 10% من قيمة الدفع
+                2: 0.15,  # 15% من قيمة الدفع
+                3: 0.2,   # 20% من قيمة الدفع
+                4: 0.25,  # 25% من قيمة الدفع
+                5: 0.3,   # 30% من قيمة الدفع
+                6: 0.5    # 50% من قيمة الدفع
+            },
+            'cooldown_hours': 24
+        }
+    
+    def get_game_settings(self):
+        """جلب إعدادات لعبة النرد"""
+        try:
+            result = db_manager.execute_query(
+                "SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'dice_%'"
+            )
+            settings = self.default_settings.copy()
+            
+            if result:
+                for row in result:
+                    key = row['setting_key']
+                    value = row['setting_value']
+                    
+                    if key == 'dice_min_payment_amount':
+                        settings['min_payment_amount'] = float(value)
+                    elif key == 'dice_cooldown_hours':
+                        settings['cooldown_hours'] = int(value)
+                    elif key.startswith('dice_prize_'):
+                        dice_number = int(key.replace('dice_prize_', ''))
+                        settings['prizes'][dice_number] = float(value)
+            
+            return settings
+        except Exception as e:
+            logger.error(f"خطأ في جلب إعدادات لعبة النرد: {str(e)}")
+            return self.default_settings
+    
+    def save_game_settings(self, settings):
+        """حفظ إعدادات لعبة النرد"""
+        try:
+            # حفظ الحد الأدنى للدفع
+            db_manager.execute_query(
+                "INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                ('dice_min_payment_amount', str(settings['min_payment_amount']))
+            )
+            
+            # حفظ وقت التبريد
+            db_manager.execute_query(
+                "INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                ('dice_cooldown_hours', str(settings['cooldown_hours']))
+            )
+            
+            # حفظ الجوائز
+            for dice_number, prize_rate in settings['prizes'].items():
+                db_manager.execute_query(
+                    "INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s) "
+                    "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                    (f'dice_prize_{dice_number}', str(prize_rate))
+                )
+            
+            return True
+        except Exception as e:
+            logger.error(f"خطأ في حفظ إعدادات لعبة النرد: {str(e)}")
+            return False
+    
+    def can_user_play(self, user_id):
+        """التحقق إذا كان المستخدم يمكنه اللعب"""
+        try:
+            # التحقق من آخر مرة لعب من قاعدة البيانات
+            result = db_manager.execute_query(
+                "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
+                (str(user_id),)
+            )
+            
+            if result and result[0]['last_play_date']:
+                last_play = result[0]['last_play_date']
+                settings = self.get_game_settings()
+                cooldown_hours = settings['cooldown_hours']
+                
+                time_passed = (datetime.now() - last_play).total_seconds()
+                if time_passed < cooldown_hours * 3600:
+                    remaining_time = (cooldown_hours * 3600) - time_passed
+                    hours = int(remaining_time // 3600)
+                    minutes = int((remaining_time % 3600) // 60)
+                    return False, f"يمكنك اللعب مرة أخرى بعد {hours:02d}:{minutes:02d}"
+            
+            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة
+            result = db_manager.execute_query(
+                "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
+                "AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 1",
+                (str(user_id),)
+            )
+            
+            if not result:
+                return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
+            
+            # التحقق من الحد الأدنى للدفع
+            settings = self.get_game_settings()
+            last_payment = float(result[0]['amount'])
+            min_amount = settings['min_payment_amount']
+            
+            if last_payment < min_amount:
+                return False, f"الحد الأدنى للدفع هو {min_amount} للعب"
+            
+            return True, last_payment
+            
+        except Exception as e:
+            logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
+            return False, "حدث خطأ في النظام"
+    
+    def play_dice_game(self, user_id, last_payment_amount):
+        """تشغيل لعبة النرد"""
+        try:
+            # إرسال النرد
+            dice_message = bot.send_dice(user_id, emoji='🎲')
+            
+            # استخدام مؤقت لانتظار ظهور النتيجة
+            def process_dice_result():
+                time.sleep(3)  # انتظار 3 ثواني
+                
+                try:
+                    # الحصول على الرقم من النرد
+                    dice_value = dice_message.dice.value
+                    
+                    # حساب الجائزة
+                    settings = self.get_game_settings()
+                    prize_rate = settings['prizes'].get(dice_value, 0.1)
+                    prize_amount = last_payment_amount * prize_rate
+                    
+                    # إضافة الجائزة إلى المحفظة
+                    new_balance = update_wallet_balance(user_id, prize_amount)
+                    
+                    # تسجيل المعاملة
+                    add_transaction({
+                        'user_id': str(user_id),
+                        'type': 'dice_prize',
+                        'amount': prize_amount,
+                        'description': f'جائزة نرد - الرقم {dice_value}'
+                    })
+                    
+                    # تحديث إحصائيات اللعبة
+                    self.update_game_stats(user_id, prize_amount, dice_value, last_payment_amount, prize_rate)
+                    
+                    # إرسال النتيجة
+                    emojis = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+                    emoji = emojis[dice_value - 1] if 1 <= dice_value <= 6 else "🎲"
+                    
+                    result_text = f"""
+🎲 <b>مبروك! فزت في لعبة النرد</b>
+
+• <b>الرقم الذي ظهر:</b> {dice_value} {emoji}
+• <b>قيمة آخر دفع:</b> {last_payment_amount:.2f}
+• <b>نسبة الجائزة:</b> {prize_rate*100}%
+• <b>مبلغ الجائزة:</b> {prize_amount:.2f}
+• <b>رصيدك الجديد:</b> {new_balance:.2f}
+
+🎉 <b>تهانينا على الفوز!</b>
+                    """
+                    
+                    bot.send_message(user_id, result_text, parse_mode="HTML")
+                    
+                except Exception as e:
+                    logger.error(f"خطأ في معالجة نتيجة النرد: {str(e)}")
+                    bot.send_message(user_id, "❌ حدث خطأ في معالجة النتيجة")
+            
+            # تشغيل المؤقت في thread منفصل
+            timer_thread = threading.Thread(target=process_dice_result)
+            timer_thread.start()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"خطأ في تشغيل لعبة النرد: {str(e)}")
+            return False
+    
+    def update_game_stats(self, user_id, prize_amount, dice_value, last_payment_amount, prize_rate):
+        """تحديث إحصائيات اللعبة"""
+        try:
+            # تحديث أو إدراج الإحصائيات
+            db_manager.execute_query("""
+                INSERT INTO dice_game_stats (user_id, plays_count, total_winnings, last_play_date, updated_at)
+                VALUES (%s, 1, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET 
+                    plays_count = dice_game_stats.plays_count + 1,
+                    total_winnings = dice_game_stats.total_winnings + EXCLUDED.total_winnings,
+                    last_play_date = EXCLUDED.last_play_date,
+                    updated_at = EXCLUDED.updated_at
+            """, (str(user_id), prize_amount))
+            
+            # إضافة إلى سجل اللعب
+            db_manager.execute_query("""
+                INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (str(user_id), dice_value, last_payment_amount, prize_rate, prize_amount))
+            
+        except Exception as e:
+            logger.error(f"خطأ في تحديث إحصائيات اللعبة: {str(e)}")
+    
+    def get_user_stats(self, user_id):
+        """جلب إحصائيات المستخدم"""
+        try:
+            result = db_manager.execute_query(
+                "SELECT plays_count, total_winnings, last_play_date FROM dice_game_stats WHERE user_id = %s",
+                (str(user_id),)
+            )
+            
+            if result:
+                return result[0]
+            else:
+                return {'plays_count': 0, 'total_winnings': 0, 'last_play_date': None}
+        except Exception as e:
+            logger.error(f"خطأ في جلب إحصائيات المستخدم: {str(e)}")
+            return {'plays_count': 0, 'total_winnings': 0, 'last_play_date': None}
+    
+    def get_user_cooldown(self, user_id):
+        """جلب الوقت المتبقي حتى يمكن اللعب مرة أخرى"""
+        try:
+            result = db_manager.execute_query(
+                "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
+                (str(user_id),)
+            )
+            
+            if not result or not result[0]['last_play_date']:
+                return 0
+            
+            last_play = result[0]['last_play_date']
+            settings = self.get_game_settings()
+            cooldown_hours = settings['cooldown_hours']
+            time_passed = (datetime.now() - last_play).total_seconds()
+            time_remaining = (cooldown_hours * 3600) - time_passed
+            
+            return max(0, time_remaining)
+            
+        except Exception as e:
+            logger.error(f"خطأ في جلب وقت التبريد: {str(e)}")
+            return 0
+
+# إنشاء كائن لعبة النرد
+dice_game = DiceGame()
+def show_dice_admin_panel(chat_id, message_id):
+    """عرض لوحة إدارة لعبة النرد"""
+    if not is_admin(chat_id):
+        bot.answer_callback_query(
+            chat_id, "ليس لديك صلاحية الدخول", show_alert=True
+        )
+        return
+    
+    settings = dice_game.get_game_settings()
+    
+    text = f"""
+🎲 <b>إدارة لعبة النرد</b>
+
+<b>الإعدادات الحالية:</b>
+• <b>الحد الأدنى للدفع:</b> {settings['min_payment_amount']:.2f}
+• <b>وقت الانتظار:</b> {settings['cooldown_hours']} ساعة
+
+<b>الجوائز:</b>
+"""
+    for dice_num, prize_rate in sorted(settings['prizes'].items()):
+        text += f"• <b>الرقم {dice_num}:</b> {prize_rate*100}%\n"
+    
+    text += "\n<b>اختر الإجراء المطلوب:</b>"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("📊 إحصائيات اللعبة", callback_data="dice_stats"),
+        types.InlineKeyboardButton("⚙️ تعديل الإعدادات", callback_data="dice_settings")
+    )
+    markup.row(
+        types.InlineKeyboardButton("🎯 تعديل الجوائز", callback_data="dice_prizes"),
+        types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_admin")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+def show_dice_settings(chat_id, message_id):
+    """عرض إعدادات لعبة النرد"""
+    if not is_admin(chat_id):
+        bot.answer_callback_query(
+            chat_id, "ليس لديك صلاحية الدخول", show_alert=True
+        )
+        return
+    
+    settings = dice_game.get_game_settings()
+    
+    text = f"""
+⚙️ <b>تعديل إعدادات لعبة النرد</b>
+
+<b>الإعدادات الحالية:</b>
+• <b>الحد الأدنى للدفع:</b> {settings['min_payment_amount']:.2f}
+• <b>وقت الانتظار:</b> {settings['cooldown_hours']} ساعة
+
+<b>اختر الإعداد الذي تريد تعديله:</b>
+"""
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("💰 الحد الأدنى للدفع", callback_data="edit_dice_min_amount"),
+        types.InlineKeyboardButton("⏰ وقت الانتظار", callback_data="edit_dice_cooldown")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+def show_dice_prizes(chat_id, message_id):
+    """عرض وتعديل الجوائز"""
+    if not is_admin(chat_id):
+        bot.answer_callback_query(
+            chat_id, "ليس لديك صلاحية الدخول", show_alert=True
+        )
+        return
+    
+    settings = dice_game.get_game_settings()
+    
+    text = """
+🎯 <b>تعديل جوائز لعبة النرد</b>
+
+<b>الجوائز الحالية (نسبة من قيمة الدفع):</b>
+"""
+    for dice_num, prize_rate in sorted(settings['prizes'].items()):
+        text += f"• <b>الرقم {dice_num}:</b> {prize_rate*100}%\n"
+    
+    text += "\n<b>اختر الرقم الذي تريد تعديل جائزته:</b>"
+    
+    markup = types.InlineKeyboardMarkup()
+    buttons = []
+    for dice_num in range(1, 7):
+        buttons.append(types.InlineKeyboardButton(
+            f"🎲 {dice_num}", 
+            callback_data=f"edit_dice_prize_{dice_num}"
+        ))
+    
+    # ترتيب الأزرار في صفوف
+    for i in range(0, len(buttons), 3):
+        markup.row(*buttons[i:i+3])
+    
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+def show_dice_section(chat_id, message_id):
+    """عرض قسم لعبة النرد"""
+    can_play, message = dice_game.can_user_play(chat_id)
+    settings = dice_game.get_game_settings()
+    user_stats = dice_game.get_user_stats(chat_id)
+    
+    if can_play:
+        status = "✅ <b>يمكنك اللعب الآن!</b>"
+        last_payment = message
+        status += f"\n• <b>قيمة آخر دفع:</b> {last_payment:.2f}"
+    else:
+        status = f"❌ <b>{message}</b>"
+    
+    text = f"""
+🎲 <b>لعبة النرد</b>
+
+<b>قواعد اللعبة:</b>
+• يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة
+• الحد الأدنى للدفع: {settings['min_payment_amount']:.2f}
+• يمكنك اللعب مرة كل {settings['cooldown_hours']} ساعة
+• الجوائز عبارة عن نسبة من قيمة آخر عملية دفع
+
+<b>إحصائياتك:</b>
+• <b>عدد مرات اللعب:</b> {user_stats['plays_count']}
+• <b>إجمالي المكاسب:</b> {user_stats['total_winnings']:.2f}
+
+<b>حالتك الحالية:</b>
+{status}
+
+<b>اختر الإجراء:</b>
+"""
+    
+    markup = types.InlineKeyboardMarkup()
+    
+    if can_play:
+        markup.add(types.InlineKeyboardButton("🎲 رمي النرد", callback_data="play_dice"))
+    else:
+        cooldown_seconds = dice_game.get_user_cooldown(chat_id)
+        if cooldown_seconds > 0:
+            hours = int(cooldown_seconds // 3600)
+            minutes = int((cooldown_seconds % 3600) // 60)
+            markup.add(types.InlineKeyboardButton(
+                f"⏳ يمكنك اللعب بعد {hours:02d}:{minutes:02d}", 
+                callback_data="dice_cooldown"
+            ))
+    
+    markup.add(types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_section"))
+    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except:
+        bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+def handle_play_dice(call):
+    """معالجة طلب لعب النرد"""
+    chat_id = call.message.chat.id
+    
+    can_play, result = dice_game.can_user_play(chat_id)
+    
+    if can_play:
+        # result هنا هو قيمة آخر عملية دفع
+        bot.answer_callback_query(call.id, "جاري إعداد النرد...")
+        success = dice_game.play_dice_game(chat_id, result)
+        
+        if not success:
+            bot.send_message(chat_id, "❌ حدث خطأ في تشغيل اللعبة")
+    else:
+        bot.answer_callback_query(
+            call.id, 
+            f"لا يمكنك اللعب الآن: {result}", 
+            show_alert=True
+        )
+
+def start_edit_dice_min_amount(chat_id):
+    """بدء تعديل الحد الأدنى للدفع"""
+    if not is_admin(chat_id):
+        return
+    
+    user_data[chat_id] = {'state': 'edit_dice_min_amount'}
+    settings = dice_game.get_game_settings()
+    current_min = settings['min_payment_amount']
+    
+    bot.send_message(
+        chat_id,
+        f"💰 <b>تعديل الحد الأدنى للدفع</b>\n\n"
+        f"القيمة الحالية: <b>{current_min:.2f}</b>\n\n"
+        f"أرسل القيمة الجديدة:",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("dice_settings")
+    )
+
+def start_edit_dice_cooldown(chat_id):
+    """بدء تعديل وقت الانتظار"""
+    if not is_admin(chat_id):
+        return
+    
+    user_data[chat_id] = {'state': 'edit_dice_cooldown'}
+    settings = dice_game.get_game_settings()
+    current_cooldown = settings['cooldown_hours']
+    
+    bot.send_message(
+        chat_id,
+        f"⏰ <b>تعديل وقت الانتظار</b>\n\n"
+        f"القيمة الحالية: <b>{current_cooldown} ساعة</b>\n\n"
+        f"أرسل عدد الساعات الجديدة:",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("dice_settings")
+    )
+
+def start_edit_dice_prize(chat_id, dice_number):
+    """بدء تعديل جائزة رقم معين"""
+    if not is_admin(chat_id):
+        return
+    
+    user_data[chat_id] = {
+        'state': 'edit_dice_prize',
+        'dice_number': dice_number
+    }
+    settings = dice_game.get_game_settings()
+    current_prize = settings['prizes'].get(dice_number, 0.1) * 100
+    
+    bot.send_message(
+        chat_id,
+        f"🎯 <b>تعديل جائزة الرقم {dice_number}</b>\n\n"
+        f"القيمة الحالية: <b>{current_prize}%</b>\n\n"
+        f"أرسل النسبة الجديدة (0-100):\n"
+        f"<em>مثال: 25 ← لنسبة 25%</em>",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("dice_prizes")
+    )
+
 
 # ===============================================================
 # دوال المساعدة المحسنة مع الهيكل الجديد
@@ -3963,6 +4533,10 @@ class EnhancedKeyboard:
         
         markup.add(types.InlineKeyboardButton("🎁 إهداء الرصيد", callback_data="gift_balance"),
             types.InlineKeyboardButton("🎟 كود هدية", callback_data="gift_code"))
+        markup.add(types.InlineKeyboardButton("لعبة النرد 🎲", callback_data="dice_section"))
+        
+        
+        
         markup.add(types.InlineKeyboardButton("📞 التواصل مع الدعم", callback_data="contact_support"))
         
         markup.add(types.InlineKeyboardButton("👥 نظام الإحالات", callback_data="referral_section"))
@@ -4045,6 +4619,9 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton("إنشاء كود هدية", callback_data="gift_code_admin"),
             types.InlineKeyboardButton("إدارة الأكواد", callback_data="gift_code_manage")
     )
+        
+        markup.row(types.InlineKeyboardButton("إدارة النرد", callback_data="dice_admin"))
+        
         markup.add(types.
 InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
         return markup
@@ -5168,6 +5745,52 @@ def handle_callbacks(call):
 
         elif call.data == "withdraw_stats":
             show_withdraw_stats(chat_id, message_id)
+        
+        # معالجات لعبة النرد - أضف هذه في قسم المعالجات المناسب
+        elif call.data == "dice_section":
+            show_dice_section(chat_id, message_id)
+
+        elif call.data == "play_dice":
+            handle_play_dice(call)
+
+        elif call.data == "dice_admin":
+            if is_admin(chat_id):
+                show_dice_admin_panel(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "dice_settings":
+            if is_admin(chat_id):
+                show_dice_settings(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "dice_prizes":
+            if is_admin(chat_id):
+                show_dice_prizes(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "edit_dice_min_amount":
+            if is_admin(chat_id):
+                start_edit_dice_min_amount(chat_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "edit_dice_cooldown":
+            if is_admin(chat_id):
+                start_edit_dice_cooldown(chat_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data.startswith("edit_dice_prize_"):
+            if is_admin(chat_id):
+                dice_number = int(call.data.replace("edit_dice_prize_", ""))
+                start_edit_dice_prize(chat_id, dice_number)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        
+        
         
         
     except Exception as e:
@@ -8334,7 +8957,80 @@ def handle_edit_gift_commission_input(message):
 def handle_edit_gift_min_amount_input(message):
     handle_edit_gift_min_amount(message)
 
+# معالجات تعديل إعدادات النرد
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+    user_data[str(message.chat.id)].get('state') == 'edit_dice_min_amount')
+def handle_edit_dice_min_amount(message):
+    chat_id = str(message.chat.id)
+    try:
+        min_amount = float(message.text.strip())
+        if min_amount < 1:
+            bot.send_message(chat_id, "يجب أن يكون المبلغ أكبر من 0")
+            return
 
+        settings = dice_game.get_game_settings()
+        settings['min_payment_amount'] = min_amount
+        if dice_game.save_game_settings(settings):
+            bot.send_message(chat_id, f"تم تحديث الحد الأدنى للدفع إلى {min_amount:.2f}")
+        else:
+            bot.send_message(chat_id, "فشل في تحديث الإعدادات")
+
+        if chat_id in user_data:
+            del user_data[chat_id]
+
+        show_dice_settings(chat_id, None)
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+    user_data[str(message.chat.id)].get('state') == 'edit_dice_cooldown')
+def handle_edit_dice_cooldown(message):
+    chat_id = str(message.chat.id)
+    try:
+        cooldown = int(message.text.strip())
+        if cooldown < 1:
+            bot.send_message(chat_id, "يجب أن يكون العدد 1 على الأقل")
+            return
+
+        settings = dice_game.get_game_settings()
+        settings['cooldown_hours'] = cooldown
+        if dice_game.save_game_settings(settings):
+            bot.send_message(chat_id, f"تم تحديث وقت الانتظار إلى {cooldown} ساعة")
+        else:
+            bot.send_message(chat_id, "فشل في تحديث الإعدادات")
+
+        if chat_id in user_data:
+            del user_data[chat_id]
+
+        show_dice_settings(chat_id, None)
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+    user_data[str(message.chat.id)].get('state') == 'edit_dice_prize')
+def handle_edit_dice_prize(message):
+    chat_id = str(message.chat.id)
+    try:
+        prize_percent = float(message.text.strip())
+        if prize_percent < 0 or prize_percent > 100:
+            bot.send_message(chat_id, "يجب أن تكون النسبة بين 0 و 100")
+            return
+
+        prize_rate = prize_percent / 100
+        dice_number = user_data[chat_id]['dice_number']
+        settings = dice_game.get_game_settings()
+        settings['prizes'][dice_number] = prize_rate
+        if dice_game.save_game_settings(settings):
+            bot.send_message(chat_id, f"تم تحديث جائزة الرقم {dice_number} إلى {prize_percent}%")
+        else:
+            bot.send_message(chat_id, "فشل في تحديث الإعدادات")
+
+        if chat_id in user_data:
+            del user_data[chat_id]
+
+        show_dice_prizes(chat_id, None)
+    except ValueError:
+        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
 # ===============================================================
 # نظام التذكير التلقائي
 # ===============================================================
@@ -8392,6 +9088,7 @@ def start_system():
 
 if __name__ == "__main__":
     start_system()
+
 
 
 
