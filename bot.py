@@ -5091,11 +5091,11 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton(" التعويض الخاص🛡️", callback_data="compensation_section"))
         
         markup.add(types.InlineKeyboardButton(" كود هدية🎟", callback_data="gift_code"),
-            types.InlineKeyboardButton(" إهداء الرصيد🎁", callback_data="gift_balance"))
+            types.InlineKeyboardButton(" إهداء رصيد🎁", callback_data="gift_balance"))
         
-        markup.add(types.InlineKeyboardButton(" لعبة النرد🎲", callback_data="dice_section"))
+        markup.add(types.InlineKeyboardButton(" رمية النرد🎲", callback_data="dice_section"))
         
-        markup.add(types.InlineKeyboardButton(" التواصل مع الدعم💬", callback_data="contact_support"))
+        markup.add(types.InlineKeyboardButton("ارسال رسالة للدعم💬", callback_data="contact_support"))
         
         markup.add(types.InlineKeyboardButton("إحالة صديق 🤴🏻", callback_data="referral_section"))
         
@@ -5649,12 +5649,25 @@ def start(message):
     accounts = load_accounts()
     has_account = str(chat_id) in accounts
     
-    welcome_text = """
-<b>مرحباً بك في بوت 55BETS! 🤖</b>
+    user_title = get_user_title(chat_id)
+    wallet_balance = get_wallet_balance(chat_id)
+    loyalty_points = get_loyalty_points(chat_id)
+    
+    # رسالة الترحيب المحدثة
+    welcome_text = f"""
 
-اختر من القائمة:
+<b>🌟 مرحبًا بك في عائلة 55BETS النخبة 🌟</b>
+
+<b>💼 رصيدك الحالي:</b> <code>{wallet_balance:.2f}</code>
+
+<b>💎 نقاط امتيازك:</b> <code>{loyalty_points}</code>
+
+
     """
     
+    accounts = load_accounts()
+    has_account = str(chat_id) in accounts
+
     bot.send_message(
         chat_id,
         welcome_text,
