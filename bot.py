@@ -719,7 +719,17 @@ class DatabaseManager:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
 """)
-                
+                # جدول الرسائل الجماعية
+                cursor.execute("""
+                CREATE TABLE broadcast_messages (
+                    message_id TEXT PRIMARY KEY,
+                    message_text TEXT NOT NULL,
+                    sent_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    sent_at TIMESTAMP,
+                    status TEXT DEFAULT 'pending'
+)
+""")
                 
                 # إدخال الجوايز الافتراضية
                 default_rewards = [
@@ -3947,6 +3957,125 @@ def handle_user_title_input(message):
             parse_mode="HTML"
         )
 
+def send_broadcast_message(message_text):
+    """إرسال رسالة جماعية لجميع المستخدمين"""
+    try:
+        # جلب جميع المستخدمين من جدول المحافظ
+        result = db_manager.execute_query('SELECT chat_id FROM wallets')
+        if not result:
+            return 0, "لا يوجد مستخدمين للإرسال"
+        
+        sent_count = 0
+        failed_count = 0
+        
+        for row in result:
+            try:
+                bot.send_message(
+                    row['chat_id'],
+                    message_text,
+                    parse_mode="HTML"
+                )
+                sent_count += 1
+                time.sleep(0.1)  # تجنب حظر التيليجرام
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"فشل في الإرسال لـ {row['chat_id']}: {str(e)}")
+        
+        # تسجيل الرسالة في قاعدة البيانات
+        message_id = f"broadcast_{int(time.time() * 1000)}"
+        db_manager.execute_query(
+            "INSERT INTO broadcast_messages (message_id, message_text, sent_count, sent_at, status) VALUES (%s, %s, %s, %s, %s)",
+            (message_id, message_text, sent_count, datetime.now(), 'completed')
+        )
+        
+        return sent_count, f"تم الإرسال بنجاح لـ {sent_count} مستخدم، فشل: {failed_count}"
+    
+    except Exception as e:
+        logger.error(f"خطأ في الإرسال الجماعي: {str(e)}")
+        return 0, f"خطأ في الإرسال: {str(e)}"
+
+def send_private_message(user_id, message_text):
+    """إرسال رسالة لمستخدم معين عن طريق الآيدي"""
+    try:
+        bot.send_message(
+            user_id,
+            message_text,
+            parse_mode="HTML"
+        )
+        return True, "تم الإرسال بنجاح"
+    except Exception as e:
+        logger.error(f"خطأ في الإرسال لـ {user_id}: {str(e)}")
+        return False, f"فشل في الإرسال: {str(e)}"
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and user_data[str(message.chat.id)].get('state') == 'admin_broadcast')
+def handle_broadcast_message(message):
+    chat_id = str(message.chat.id)
+    message_text = message.text
+    
+    # تنظيف البيانات
+    if chat_id in user_data:
+        del user_data[chat_id]
+    
+    # إرسال الرسالة الجماعية
+    sent_count, result_message = send_broadcast_message(message_text)
+    
+    bot.send_message(
+        chat_id,
+        f"📊 <b>نتيجة الإرسال الجماعي</b>\n\n{result_message}",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
+    )
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and user_data[str(message.chat.id)].get('state') == 'admin_private_user')
+def handle_private_user_input(message):
+    chat_id = str(message.chat.id)
+    user_id = message.text.strip()
+    
+    if not user_id.isdigit():
+        bot.send_message(chat_id, "❌ آيدي المستخدم يجب أن يكون أرقام فقط")
+        return
+    
+    user_data[chat_id] = {
+        'state': 'admin_private_message',
+        'target_user': user_id
+    }
+    
+    bot.send_message(
+        chat_id,
+        f"👤 <b>إرسال رسالة للمستخدم</b>\n\nآيدي المستخدم: <code>{user_id}</code>\n\nأرسل الرسالة:",
+        parse_mode="HTML",
+        reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
+    )
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and user_data[str(message.chat.id)].get('state') == 'admin_private_message')
+def handle_private_message_input(message):
+    chat_id = str(message.chat.id)
+    message_text = message.text
+    target_user = user_data[chat_id]['target_user']
+    
+    # تنظيف البيانات
+    if chat_id in user_data:
+        del user_data[chat_id]
+    
+    # إرسال الرسالة للمستخدم
+    success, result_message = send_private_message(target_user, message_text)
+    
+    if success:
+        bot.send_message(
+            chat_id,
+            f"✅ <b>تم الإرسال بنجاح</b>\n\nللمستخدم: <code>{target_user}</code>",
+            parse_mode="HTML",
+            reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
+        )
+    else:
+        bot.send_message(
+            chat_id,
+            f"❌ <b>فشل في الإرسال</b>\n\n{result_message}",
+            parse_mode="HTML",
+            reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
+        )
+
+
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -5153,12 +5282,11 @@ class EnhancedKeyboard:
         )
         
         markup.row(
-            types.InlineKeyboardButton("👥 إدارة الإحالات", callback_data="referral_admin"),
-            types.InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats")
+            types.InlineKeyboardButton("👥 إدارة الإحالات", callback_data="referral_admin")
         )
         
         markup.row(
-            types.InlineKeyboardButton("👤 إدارة المستخدمين", callback_data="manage_users"),
+            
             types.InlineKeyboardButton("🔧 الصيانة", callback_data="maintenance_settings")
         )
         markup.row(
@@ -5173,6 +5301,14 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton("إنشاء كود هدية", callback_data="gift_code_admin"),
             types.InlineKeyboardButton("إدارة الأكواد", callback_data="gift_code_manage")
     )
+        
+        
+        markup.row(
+        types.InlineKeyboardButton("📢 إرسال جماعي", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("👤 رسالة لمستخدم", callback_data="admin_private_message")
+    )
+        
+        
         markup.add(types.
 InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
@@ -5662,7 +5798,7 @@ def start(message):
     # رسالة الترحيب المحدثة
     welcome_text = f"""
 
-<b>🌟 مرحبًا بك في عائلة 55BETS النخبة 🌟</b>
+<blockquote> <b>👋🏻 مرحبًا بك في عائلة 55BETS النخبة </b> </blockquote>
 
 <b>💼 رصيدك الحالي:</b> <code>{wallet_balance:.2f}</code>
 
@@ -6434,7 +6570,31 @@ def handle_callbacks(call):
         elif call.data == "main_menu":
             show_main_menu(chat_id, message_id)
         
-        
+        elif call.data == "admin_broadcast":
+            if is_admin(chat_id):
+                user_data[chat_id] = {'state': 'admin_broadcast'}
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="📢 <b>الإرسال الجماعي</b>\n\nأرسل الرسالة التي تريد إرسالها لجميع المستخدمين:",
+                    parse_mode="HTML",
+                    reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
+        )
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "admin_private_message":
+            if is_admin(chat_id):
+                user_data[chat_id] = {'state': 'admin_private_user'}
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="👤 <b>إرسال رسالة لمستخدم</b>\n\nأرسل آيدي المستخدم:",
+                    parse_mode="HTML",
+                    reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
+        )
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
         
         
     except Exception as e:
@@ -7775,13 +7935,12 @@ def show_loyalty_section(chat_id, message_id):
     
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton("🏆 ترتيب أفضل 10", callback_data="loyalty_leaderboard"),
-        types.InlineKeyboardButton("🎁 تبديل النقاط", callback_data="loyalty_redeem")
+        types.InlineKeyboardButton("🏆 ترتيب أفضل 10", callback_data="loyalty_leaderboard")
+        
     )
     markup.row(
         types.InlineKeyboardButton("📊 سجل النقاط", callback_data="loyalty_history"),
-        types.InlineKeyboardButton("🔄 تحديث", callback_data="loyalty_section")
-    )
+        types.InlineKeyboardButton("استبدال النقاط 🎁", callback_data="loyalty_redeem"))
     markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
     
     try:
