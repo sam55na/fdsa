@@ -3138,7 +3138,7 @@ def show_dice_section(chat_id, message_id):
 
     markup = types.InlineKeyboardMarkup()
     if can_play and settings.get('dice_enabled') == 'true':
-        markup.add(types.InlineKeyboardButton("🎲 العب النرد مجاناً", callback_data="play_dice"))
+        
     else:
         if not has_qualifying_payment:
             markup.add(types.InlineKeyboardButton("💳 إيداع رصيد", callback_data="payment_methods"))
@@ -5093,7 +5093,7 @@ class EnhancedKeyboard:
         markup.add(types.InlineKeyboardButton(" كود هدية🎟", callback_data="gift_code"),
             types.InlineKeyboardButton(" إهداء رصيد🎁", callback_data="gift_balance"))
         
-        markup.add(types.InlineKeyboardButton(" رمية النرد🎲", callback_data="dice_section"))
+        markup.add(types.InlineKeyboardButton("🎲 رمية النرد", callback_data="play_dice"))
         
         markup.add(types.InlineKeyboardButton("ارسال رسالة للدعم💬", callback_data="contact_support"))
         
