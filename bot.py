@@ -4080,7 +4080,31 @@ def handle_private_message_input(message):
             reply_markup=EnhancedKeyboard.create_back_button("admin_panel")
         )
 
+def show_maintenance_settings(chat_id, message_id):
+    maintenance = load_maintenance()
+    status = "🟢 مفعل" if maintenance.get('active') else "🔴 معطل"
+    
+    text = f"""
+🛠️ <b>إعدادات الصيانة</b>
 
+<b>الحالة الحالية:</b> {status}
+<b>الرسالة:</b> {maintenance.get('message', 'لا توجد رسالة')}
+
+اختر الإجراء المطلوب:
+"""
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("✅ تفعيل الصيانة", callback_data="enable_maintenance"),
+        types.InlineKeyboardButton("❌ تعطيل الصيانة", callback_data="disable_maintenance")
+    )
+    markup.row(
+        types.InlineKeyboardButton("✏️ تعديل الرسالة", callback_data="edit_maintenance_msg")
+    )
+    markup.add(types.InlineKeyboardButton("← رجوع", callback_data="admin_panel"))
+    
+    bot.edit_message_text(chat_id=chat_id, message_id=message_id, 
+                         text=text, parse_mode="HTML", reply_markup=markup)
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -5802,14 +5826,11 @@ def start(message):
     
     # رسالة الترحيب المحدثة
     welcome_text = f"""
-
-<blockquote> <b>👋🏻 مرحبًا بك في عائلة 55BETS النخبة </b> </blockquote>
+<blockquote><b>👋🏻 مرحباً بك في 55BETS</b></blockquote>
 
 <b>💼 رصيدك الحالي:</b> <code>{wallet_balance:.2f}</code>
 
 <b>💎 نقاط امتيازك:</b> <code>{loyalty_points}</code>
-
-
     """
     
     accounts = load_accounts()
@@ -6600,6 +6621,31 @@ def handle_callbacks(call):
         )
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        
+        elif call.data == "maintenance_settings":
+            if is_admin(chat_id):
+                show_maintenance_settings(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+
+
+        # معالجات تفعيل/تعطيل الصيانة
+        elif call.data == "enable_maintenance":
+            if is_admin(chat_id):
+                maintenance_data = {'active': True, 'message': 'البوت في حالة صيانة مؤقتة'}
+                save_maintenance(maintenance_data)
+                bot.answer_callback_query(call.id, "✅ تم تفعيل وضع الصيانة")
+                show_maintenance_settings(chat_id, message_id)
+
+        elif call.data == "disable_maintenance":
+            if is_admin(chat_id):
+                maintenance_data = {'active': False, 'message': 'البوت في حالة صيانة مؤقتة'}
+                save_maintenance(maintenance_data)
+                bot.answer_callback_query(call.id, "❌ تم تعطيل وضع الصيانة")
+                show_maintenance_settings(chat_id, message_id)
+        
+        
         
         
     except Exception as e:
