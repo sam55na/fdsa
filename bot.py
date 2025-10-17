@@ -1867,7 +1867,7 @@ def show_terms_and_conditions(chat_id, message_id=None):
     
     # إنشاء زر الرجوع
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
     
     try:
         if message_id:
@@ -1976,7 +1976,7 @@ def show_gift_section(chat_id, message_id):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🎁 بدء عملية الإهداء", callback_data="start_gift"))
     markup.add(types.InlineKeyboardButton("📋 سجل الإهداءات", callback_data="gift_history"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
     
     try:
         bot.edit_message_text(
@@ -2224,7 +2224,7 @@ def show_gift_history(chat_id, message_id):
         text += "❌ <b>لا توجد عمليات إهداء سابقة</b>"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="gift_section"))
     
     try:
         bot.edit_message_text(
@@ -2375,7 +2375,7 @@ def show_gift_admin_panel(chat_id, message_id):
         
     )
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     try:
         bot.edit_message_text(
@@ -2435,7 +2435,7 @@ def show_gift_detailed_stats(chat_id, message_id):
         text += "لا توجد بيانات\n"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="gift_admin"))
     
     try:
         bot.edit_message_text(
@@ -2478,7 +2478,7 @@ def show_all_gift_transactions(chat_id, message_id):
         text += "❌ <b>لا توجد عمليات إهداء</b>"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="gift_admin"))
     
     try:
         bot.edit_message_text(
@@ -2523,7 +2523,7 @@ def show_edit_gift_settings(chat_id, message_id):
         types.InlineKeyboardButton("💰 تعديل الحد الأدنى", callback_data="edit_gift_min_amount")
     )
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="gift_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="gift_admin"))
     
     try:
         bot.edit_message_text(
@@ -2800,7 +2800,7 @@ def start_gift_code_input(chat_id):
     
     bot.send_message(
         chat_id,
-        "🎟 كود هدية\n\nأدخل الكود للحصول على الهدية\n\nيتم الحصول على الهدية من خلال صفحتنا على الفيسبوك وقناتنا التلغرام",
+        "<blockquote>🎟 كود هدية</blockquote>\n\nأدخل الكود للحصول على الهدية\n\nيتم الحصول على الهدية من خلال صفحتنا على الفيسبوك وقناتنا التلغرام",
         parse_mode="HTML"
     )
 
@@ -3149,7 +3149,7 @@ def show_dice_section(chat_id, message_id):
     if is_admin(chat_id):
         markup.add(types.InlineKeyboardButton("⚙️ إدارة النرد", callback_data="dice_admin"))
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
 
     try:
         bot.edit_message_text(
@@ -3273,7 +3273,7 @@ def show_dice_rewards(chat_id, message_id):
             text += "\n"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="dice_section"))
     
     try:
         bot.edit_message_text(
@@ -3323,7 +3323,7 @@ def show_dice_admin_panel(chat_id, message_id):
         types.InlineKeyboardButton("🎁 الجوائز", callback_data="manage_dice_rewards"),
         types.InlineKeyboardButton("📊 الإحصائيات", callback_data="dice_admin_stats")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
 
     try:
         bot.edit_message_text(
@@ -3367,7 +3367,7 @@ def show_dice_settings_admin(chat_id, message_id):
     markup.row(
         types.InlineKeyboardButton("🔄 " + ("تعطيل" if settings.get('dice_enabled') == 'true' else "تفعيل"), 
                                  callback_data="toggle_dice_system"),
-        types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin")
+        types.InlineKeyboardButton("➞ رجوع", callback_data="dice_admin")
     )
 
     try:
@@ -3415,7 +3415,7 @@ def show_dice_stats(chat_id, message_id):
 """
 
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="dice_section"))
     
     try:
         bot.edit_message_text(
@@ -3582,7 +3582,7 @@ def show_dice_rewards_management(chat_id, message_id):
         types.InlineKeyboardButton("🔄 تحديث", callback_data="manage_dice_rewards"),
         types.InlineKeyboardButton("📊 الإحصائيات", callback_data="dice_admin_stats")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="dice_admin"))
     
     try:
         bot.edit_message_text(
@@ -3643,7 +3643,7 @@ def show_dice_admin_stats(chat_id, message_id):
 """
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="dice_admin"))
         
         bot.edit_message_text(
             chat_id=chat_id,
@@ -3701,7 +3701,7 @@ def handle_edit_dice_reward(call):
     if current_reward and current_reward['active']:
         markup.row(types.InlineKeyboardButton("✅ إلغاء التعطيل", callback_data=f"dice_enable_{dice_value}"))
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="manage_dice_rewards"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="manage_dice_rewards"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -4033,7 +4033,7 @@ def show_withdraw_history(chat_id, message_id=None):
             types.InlineKeyboardButton("🔄 تحديث", callback_data="withdraw_history"),
             types.InlineKeyboardButton("📊 إحصائيات", callback_data="withdraw_stats")
         )
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         
         # إرسال أو تعديل الرسالة
         if message_id:
@@ -4104,7 +4104,7 @@ def show_withdraw_stats(chat_id, message_id):
             types.InlineKeyboardButton("📋 السجل الكامل", callback_data="withdraw_history"),
             types.InlineKeyboardButton("🔄 تحديث", callback_data="withdraw_stats")
         )
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         
         bot.edit_message_text(
             chat_id=chat_id,
@@ -4450,7 +4450,7 @@ def show_referral_section(chat_id, message_id):
         types.InlineKeyboardButton("📋 قائمة الإحالات", callback_data="show_my_referrals"),
         types.InlineKeyboardButton("🔄 تحديث", callback_data="referral_section")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
     
     try:
         bot.edit_message_text(
@@ -4483,7 +4483,7 @@ def show_my_referrals(chat_id, message_id):
         text += "❌ لا توجد إحالات حتى الآن.\n\nاستخدم رابط الإحالة لجلب أعضاء جدد!"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="referral_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="referral_section"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -4523,7 +4523,7 @@ def show_referral_admin_panel(chat_id, message_id):
         types.InlineKeyboardButton("💰 توزيع الآن", callback_data="force_distribute"),
         types.InlineKeyboardButton("🔄 إعادة تعيين", callback_data="silent_reset_confirm")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -4552,7 +4552,7 @@ def show_referral_settings(chat_id, message_id):
         types.InlineKeyboardButton("📊 تعديل النسبة", callback_data="edit_commission_rate"),
         types.InlineKeyboardButton("⏰ تعديل الأيام", callback_data="edit_payout_days")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="referral_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="referral_admin"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -4857,7 +4857,7 @@ def show_gift_code_management(chat_id, message_id):
     if not usages:
         text = "📊 لا توجد استخدامات لأخر 3 أكواد"
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
         
         bot.edit_message_text(
             chat_id=chat_id,
@@ -4898,7 +4898,7 @@ def show_gift_code_management(chat_id, message_id):
     
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🔄 تحديث", callback_data="gift_code_manage"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     try:
         bot.edit_message_text(
@@ -5005,11 +5005,11 @@ class PaymentSystem:
         markup = types.InlineKeyboardMarkup()
         
         for method_id, method in methods.items():
-            button_text = f"💳 {method['name']}"
+            button_text = f"🟢 {method['name']}"
             callback_data = f"{action_type}_method_{method_id}"
             markup.add(types.InlineKeyboardButton(button_text, callback_data=callback_data))
         
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
 
 class WithdrawSystem:
@@ -5056,7 +5056,7 @@ class WithdrawSystem:
             markup.add(types.InlineKeyboardButton(button_text, 
                         callback_data=f"withdraw_method_{method_id}"))
         
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
 
 # إنشاء أنظمة الدفع والسحب
@@ -5076,7 +5076,7 @@ class EnhancedKeyboard:
         markup.add(types.InlineKeyboardButton("⚡ حساب 55BETS وشحنه ⚡", callback_data="account_section"))
         
         
-        markup.add(types.InlineKeyboardButton("⛓️ رابط موقع 55BETS", url="https://www.55bets.net/"))
+        markup.add(types.InlineKeyboardButton("رابط موقع 🔗 55BETS", url="https://www.55bets.net/"))
         # أزرار طرق السحب والدفع
         markup.row(
             types.InlineKeyboardButton("سحب حوالة مالية📤", callback_data="withdraw_methods"),
@@ -5123,20 +5123,20 @@ class EnhancedKeyboard:
         else:
             markup.add(types.InlineKeyboardButton("👤 معلومات حسابي", callback_data="show_account"))
             
-            markup.add(types.InlineKeyboardButton("⛓️ رابط موقع 55BETS", url="https://www.55bets.net/"))
+            markup.add(types.InlineKeyboardButton("🔗 رابط موقع 55BETS", url="https://www.55bets.net/"))
             
             markup.row(
-                types.InlineKeyboardButton("↙️ شحن الحساب", callback_data="deposit_to_account"),
-                types.InlineKeyboardButton("↗️ السحب من الحساب", callback_data="withdraw_from_account")
+                types.InlineKeyboardButton(" شحن الحساب📥", callback_data="deposit_to_account"),
+                types.InlineKeyboardButton(" السحب من الحساب📤", callback_data="withdraw_from_account")
             )
         
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
 
     @staticmethod
     def create_back_button(target="main_menu"):
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data=target))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data=target))
         return markup
 
     @staticmethod
@@ -5179,7 +5179,7 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton("إدارة الأكواد", callback_data="gift_code_manage")
     )
         markup.add(types.
-InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
 
 # ===============================================================
@@ -6753,7 +6753,7 @@ def handle_loyalty_stats(call):
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 تحديث", callback_data="loyalty_stats"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_admin"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_admin"))
         
         bot.edit_message_text(
             chat_id=chat_id,
@@ -6810,7 +6810,7 @@ def show_rewards_management(chat_id, message_id):
                 types.InlineKeyboardButton(f"❌ {reward['name']}", callback_data=f"toggle_reward_{reward_id}")
             )
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_admin"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -7079,7 +7079,7 @@ def show_main_menu(chat_id, message_id=None):
         
         # نص الترحيب المحدث
         welcome_text = (
-            f"<b>👋 اهلا بك {user_title} في عالم النخبة</b>\n\n"
+            f"<b> <blockquote>👋 اهلا بك {user_title}</b> </blockquote>\n\n"
             f"💰 <b>رصيدك في البوت:</b> {wallet_balance:.2f}\n"
             f"💎 <b>نقاط الامتياز:</b> {loyalty_points}\n\n"
             f"<b>اختر من القائمة:</b>"
@@ -7269,7 +7269,7 @@ def show_account_info(chat_id, message_id):
         """
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="account_section"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="account_section"))
         
         try:
             bot.edit_message_text(
@@ -7771,7 +7771,7 @@ def show_loyalty_section(chat_id, message_id):
         types.InlineKeyboardButton("📊 سجل النقاط", callback_data="loyalty_history"),
         types.InlineKeyboardButton("🔄 تحديث", callback_data="loyalty_section")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
     
     try:
         bot.edit_message_text(
@@ -7815,7 +7815,7 @@ def show_loyalty_leaderboard(chat_id, message_id):
     text += f"\n🎯 <b>نقاطك:</b> {user_points}♞"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_section"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -7896,7 +7896,7 @@ def show_loyalty_redeem(chat_id, message_id):
             if row_buttons:
                 markup.row(*row_buttons)
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_section"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -7940,7 +7940,7 @@ def show_loyalty_history(chat_id, message_id):
         text += "\nلا توجد عمليات سابقة"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_section"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_section"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -7964,7 +7964,7 @@ def show_compensation_section(chat_id, message_id):
 سيتم إعلامك عند تفعيل النظام من قبل الإدارة.
 """
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         
         try:
             bot.edit_message_text(
@@ -8002,7 +8002,7 @@ def show_compensation_section(chat_id, message_id):
 يرجى الانتظار حتى يتم مراجعة طلبك من قبل الإدارة.
 """
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+        markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         
         try:
             bot.edit_message_text(
@@ -8070,16 +8070,8 @@ def show_compensation_section(chat_id, message_id):
     )
     
     text = f"""
-🛡️ <b>نظام التعويض الخاص</b>
-
-<b>الشروط:</b>
-• تعويض {compensation_rate}% عند خسارة {min_loss_amount:,.0f} SYP على الأقل
-• خلال آخر 24 ساعة
-
-<b>إحصائياتك:</b>
-• صافي خسارتك الإجمالية: <b>{gross_net_loss:,.0f} SYP</b>
-• الخسارة المتاحة للتعويض: <b>{available_net_loss:,.0f} SYP</b>
-• مبلغ التعويض المتوقع: <b>{expected_compensation:,.0f} SYP</b>
+❇️ الشرط: تعويض {compensation_rate}% عند خسارة SYP {min_loss_amount:,.0f}
+ على الاقل خلال 24 ساعة.يحصل كل مستخدم على التعويض بشكل فردي ولا يوجد موعد محدد للتوزيع، يتم اضافة قيمة التعويض بعد الاحتساب بشكل فردي بعد التحقق من الشروط حان موعد الحصول على التعويض، قم بالنقر على الزر ادناه ✅>
 """
 
     # إضافة معلومات عن آخر تعويض إذا وجد
@@ -8090,26 +8082,11 @@ def show_compensation_section(chat_id, message_id):
 • آخر تعويض: <b>{last_loss:,.0f} SYP</b> في {last_date}
 """
 
-    text += f"""
-• حالتك: {'<b>✅ مؤهل للتعويض</b>' if eligible else '<b>❌ غير مؤهل</b>'}
-
-{'<b>حان موعد الحصول على التعويض، قم بالنقر على الزر ادناه</b>' if eligible else '<b>لم تستوفِ الشروط بعد</b>'}
-"""
-
-    # إضافة تلميحات للمستخدم غير المؤهل
-    if not eligible:
-        if available_net_loss > 0:
-            text += f"\n📊 تحتاج إلى خسارة <b>{(min_loss_amount - available_net_loss):,.0f} SYP</b> إضافية للتأهل للتعويض."
-        else:
-            text += f"\n💡 قم بإجراء عمليات شحن وسحب لتكوين خسارة تصل إلى <b>{min_loss_amount:,.0f} SYP</b> على الأقل."
-
     markup = types.InlineKeyboardMarkup()
     
-    if eligible:
-        markup.add(types.InlineKeyboardButton("✅ تقديم طلب تعويض", callback_data="request_compensation"))
+    markup.add(types.InlineKeyboardButton("💸 احتساب التعويض الآن", callback_data="request_compensation"))
     
-    markup.add(types.InlineKeyboardButton("🔄 تحديث", callback_data="compensation_section"))
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
     
     try:
         bot.edit_message_text(
@@ -8126,6 +8103,8 @@ def show_compensation_section(chat_id, message_id):
             parse_mode="HTML",
             reply_markup=markup
         )
+    
+
 
 
 def handle_compensation_request(call, chat_id, message_id):
@@ -8394,7 +8373,7 @@ def show_compensation_admin_panel(chat_id, message_id):
         types.InlineKeyboardButton("📋 الطلبات المعلقة", callback_data="pending_compensations")
     )
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     try:
         bot.edit_message_text(
@@ -8448,7 +8427,7 @@ def show_pending_compensations(chat_id, message_id):
         text += "❌ لا توجد طلبات تعويض معلقة"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="compensation_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="compensation_admin"))
     
     try:
         bot.edit_message_text(
@@ -8499,7 +8478,7 @@ def show_manage_payment_methods(chat_id, message_id):
                 types.InlineKeyboardButton(f"🗑️ حذف", callback_data=f"delete_payment_method_{method_id}")
             )
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     try:
         bot.edit_message_text(
@@ -8675,7 +8654,7 @@ def show_manage_withdraw_methods(chat_id, message_id):
                 types.InlineKeyboardButton(f"🗑️ حذف", callback_data=f"delete_withdraw_method_{method_id}")
             )
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     try:
         bot.edit_message_text(
@@ -8821,7 +8800,7 @@ def show_referral_stats(chat_id, message_id):
         text += f"• المستخدم {commission['referrer_id']}: {commission['total_pending']:.2f}\n"
     
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="referral_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="referral_admin"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -9175,7 +9154,7 @@ def show_loyalty_admin_panel(chat_id, message_id):
         types.InlineKeyboardButton("🔄 تفعيل/تعطيل", callback_data="loyalty_toggle"),
         types.InlineKeyboardButton("📊 الإحصائيات", callback_data="loyalty_stats")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="admin_panel"))
     
     bot.edit_message_text(
         chat_id=chat_id,
@@ -9220,7 +9199,7 @@ def show_loyalty_settings_admin(chat_id, message_id):
         types.InlineKeyboardButton("🔄 تصفير الكل", callback_data="reset_all_points"),
         types.InlineKeyboardButton("📤 تصدير البيانات", callback_data="export_points_data")
     )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_admin"))
     
     if message_id:
         bot.edit_message_text(
@@ -9264,7 +9243,7 @@ def show_pending_redemption_requests(chat_id, message_id):
         text += "لا توجد طلبات معلقة"
         markup = types.InlineKeyboardMarkup()
     
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="loyalty_admin"))
+    markup.add(types.InlineKeyboardButton("➞ رجوع", callback_data="loyalty_admin"))
     
     bot.edit_message_text(
         chat_id=chat_id,
