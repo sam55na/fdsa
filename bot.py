@@ -1337,6 +1337,239 @@ class DiceGameAdmin:
 dice_manager = DiceGameManager(db_manager, bot)
 dice_ui = DiceGameUI(dice_manager, bot)
 dice_admin = DiceGameAdmin(dice_manager, bot)
+
+# أضف هذه المعالجات المنفصلة بعد تعريف dice_manager, dice_ui, dice_admin
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_section")
+def handle_dice_section(call):
+    dice_ui.show_dice_section(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "play_dice")
+def handle_play_dice(call):
+    dice_ui.handle_dice_play(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_stats")
+def handle_dice_stats(call):
+    dice_ui.show_user_dice_stats(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_admin")
+def handle_dice_admin(call):
+    if is_admin(str(call.message.chat.id)):
+        dice_admin.show_dice_admin_panel(str(call.message.chat.id), call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_dice_settings")
+def handle_edit_dice_settings(call):
+    if is_admin(str(call.message.chat.id)):
+        dice_admin.show_edit_dice_settings(str(call.message.chat.id), call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "manage_dice_rewards")
+def handle_manage_dice_rewards(call):
+    if is_admin(str(call.message.chat.id)):
+        dice_admin.show_manage_dice_rewards(str(call.message.chat.id), call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_reward_"))
+def handle_edit_reward(call):
+    if is_admin(str(call.message.chat.id)):
+        dice_number = int(call.data.replace("edit_reward_", ""))
+        dice_admin.start_edit_reward(str(call.message.chat.id), dice_number)
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+# معالجات إعدادات اللعبة الجديدة - هذه ناقصة
+@bot.callback_query_handler(func=lambda call: call.data == "toggle_dice_game")
+def handle_toggle_dice_game(call):
+    if is_admin(str(call.message.chat.id)):
+        settings = dice_manager.get_dice_settings()
+        current_status = settings.get('game_enabled', 'true')
+        new_status = 'false' if current_status == 'true' else 'true'
+        
+        settings['game_enabled'] = new_status
+        if dice_manager.save_dice_settings(settings):
+            status_text = "مفعل" if new_status == 'true' else "معطل"
+            bot.answer_callback_query(call.id, f"تم {status_text} اللعبة")
+            dice_admin.show_edit_dice_settings(str(call.message.chat.id), call.message.message_id)
+        else:
+            bot.answer_callback_query(call.id, "فشل في التحديث", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_min_payment")
+def handle_edit_min_payment(call):
+    if is_admin(str(call.message.chat.id)):
+        user_data[str(call.message.chat.id)] = {'state': 'edit_min_payment'}
+        bot.send_message(
+            call.message.chat.id,
+            "💰 <b>تعديل الحد الأدنى للدفع</b>\n\n"
+            "أرسل القيمة الجديدة للحد الأدنى للدفع:",
+            parse_mode="HTML"
+        )
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_cooldown")
+def handle_edit_cooldown(call):
+    if is_admin(str(call.message.chat.id)):
+        user_data[str(call.message.chat.id)] = {'state': 'edit_cooldown'}
+        bot.send_message(
+            call.message.chat.id,
+            "⏰ <b>تعديل مدة الانتظار بين المحاولات</b>\n\n"
+            "أرسل عدد الساعات الجديدة بين كل محاولة:",
+            parse_mode="HTML"
+        )
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_max_plays")
+def handle_edit_max_plays(call):
+    if is_admin(str(call.message.chat.id)):
+        user_data[str(call.message.chat.id)] = {'state': 'edit_max_plays'}
+        bot.send_message(
+            call.message.chat.id,
+            "🎯 <b>تعديل الحد اليومي للمحاولات</b>\n\n"
+            "أرسل العدد الجديد للمحاولات اليومية:",
+            parse_mode="HTML"
+        )
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_detailed_stats")
+def handle_dice_detailed_stats(call):
+    if is_admin(str(call.message.chat.id)):
+        stats = dice_manager.get_dice_game_stats()
+        
+        text = "📊 <b>إحصائيات مفصلة - لعبة النرد</b>\n\n"
+        
+        if stats:
+            text += f"👥 إجمالي اللاعبين: <b>{stats['total_players']}</b>\n"
+            text += f"🎲 إجمالي المرات: <b>{stats['total_games']}</b>\n"
+            text += f"💰 إجمالي المكاسب: <b>{stats['total_payouts']:.2f}</b>\n\n"
+            
+            if stats['lucky_numbers']:
+                text += "🍀 <b>أكثر الأرقام حظاً:</b>\n"
+                for i, number in enumerate(stats['lucky_numbers'], 1):
+                    emoji = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][number['dice_value']-1]
+                    text += f"{i}. {emoji} <b>رقم {number['dice_value']}</b> - "
+                    text += f"<b>{number['frequency']}</b> مرة - "
+                    text += f"متوسط: <b>{number['avg_multiplier']*100:.1f}%</b>\n"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+        
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    else:
+        bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+# معالجات الرسائل للإعدادات - هذه ناقصة
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'edit_min_payment')
+def handle_edit_min_payment_input(message):
+    chat_id = str(message.chat.id)
+    try:
+        min_amount = float(message.text.strip())
+        if min_amount < 1:
+            bot.send_message(chat_id, "❌ القيمة يجب أن تكون أكبر من 0")
+            return
+        
+        settings = dice_manager.get_dice_settings()
+        settings['min_payment_amount'] = str(min_amount)
+        
+        if dice_manager.save_dice_settings(settings):
+            bot.send_message(chat_id, f"✅ تم تحديث الحد الأدنى للدفع إلى {min_amount}")
+        else:
+            bot.send_message(chat_id, "❌ فشل في التحديث")
+        
+        del user_data[chat_id]
+        dice_admin.show_edit_dice_settings(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'edit_cooldown')
+def handle_edit_cooldown_input(message):
+    chat_id = str(message.chat.id)
+    try:
+        cooldown = int(message.text.strip())
+        if cooldown < 1:
+            bot.send_message(chat_id, "❌ القيمة يجب أن تكون 1 على الأقل")
+            return
+        
+        settings = dice_manager.get_dice_settings()
+        settings['cooldown_hours'] = str(cooldown)
+        
+        if dice_manager.save_dice_settings(settings):
+            bot.send_message(chat_id, f"✅ تم تحديث مدة الانتظار إلى {cooldown} ساعة")
+        else:
+            bot.send_message(chat_id, "❌ فشل في التحديث")
+        
+        del user_data[chat_id]
+        dice_admin.show_edit_dice_settings(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'edit_max_plays')
+def handle_edit_max_plays_input(message):
+    chat_id = str(message.chat.id)
+    try:
+        max_plays = int(message.text.strip())
+        if max_plays < 1:
+            bot.send_message(chat_id, "❌ القيمة يجب أن تكون 1 على الأقل")
+            return
+        
+        settings = dice_manager.get_dice_settings()
+        settings['max_plays_per_day'] = str(max_plays)
+        
+        if dice_manager.save_dice_settings(settings):
+            bot.send_message(chat_id, f"✅ تم تحديث الحد اليومي إلى {max_plays} محاولة")
+        else:
+            bot.send_message(chat_id, "❌ فشل في التحديث")
+        
+        del user_data[chat_id]
+        dice_admin.show_edit_dice_settings(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
+# معالج تعديل الجوائز (موجود لديك بالفعل)
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                    user_data[str(message.chat.id)].get('state') == 'edit_dice_reward')
+def handle_edit_dice_reward(message):
+    chat_id = str(message.chat.id)
+    try:
+        multiplier_percent = float(message.text.strip())
+        if multiplier_percent < 0 or multiplier_percent > 1000:
+            bot.send_message(chat_id, "❌ النسبة يجب أن تكون بين 0 و 1000")
+            return
+        
+        multiplier = multiplier_percent / 100.0
+        dice_number = user_data[chat_id]['dice_number']
+        
+        if dice_manager.update_dice_reward(dice_number, multiplier):
+            bot.send_message(chat_id, f"✅ تم تحديث جائزة الرقم {dice_number} إلى {multiplier_percent}%")
+        else:
+            bot.send_message(chat_id, "❌ فشل في تحديث الجائزة")
+        
+        del user_data[chat_id]
+        dice_admin.show_manage_dice_rewards(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
+
 # ===============================================================
 # دوال المساعدة المحسنة مع الهيكل الجديد
 # ===============================================================
@@ -8959,59 +9192,7 @@ def handle_edit_gift_min_amount_input(message):
 
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "dice_section")
-def handle_dice_section(call):
-    dice_ui.show_dice_section(str(call.message.chat.id), call.message.message_id)
 
-@bot.callback_query_handler(func=lambda call: call.data == "play_dice")
-def handle_play_dice(call):
-    dice_ui.handle_dice_play(call)
-
-@bot.callback_query_handler(func=lambda call: call.data == "dice_stats")
-def handle_dice_stats(call):
-    dice_ui.show_user_dice_stats(str(call.message.chat.id), call.message.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data == "dice_admin")
-def handle_dice_admin(call):
-    dice_admin.show_dice_admin_panel(str(call.message.chat.id), call.message.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data == "edit_dice_settings")
-def handle_edit_dice_settings(call):
-    dice_admin.show_edit_dice_settings(str(call.message.chat.id), call.message.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data == "manage_dice_rewards")
-def handle_manage_dice_rewards(call):
-    dice_admin.show_manage_dice_rewards(str(call.message.chat.id), call.message.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_reward_"))
-def handle_edit_reward(call):
-    dice_number = int(call.data.replace("edit_reward_", ""))
-    dice_admin.start_edit_reward(str(call.message.chat.id), dice_number)
-
-# معالج تعديل الجوائز:
-@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-                    user_data[str(message.chat.id)].get('state') == 'edit_dice_reward')
-def handle_edit_dice_reward(message):
-    chat_id = str(message.chat.id)
-    try:
-        multiplier_percent = float(message.text.strip())
-        if multiplier_percent < 0 or multiplier_percent > 1000:
-            bot.send_message(chat_id, "❌ النسبة يجب أن تكون بين 0 و 1000")
-            return
-        
-        multiplier = multiplier_percent / 100.0
-        dice_number = user_data[chat_id]['dice_number']
-        
-        if dice_manager.update_dice_reward(dice_number, multiplier):
-            bot.send_message(chat_id, f"✅ تم تحديث جائزة الرقم {dice_number} إلى {multiplier_percent}%")
-        else:
-            bot.send_message(chat_id, "❌ فشل في تحديث الجائزة")
-        
-        del user_data[chat_id]
-        dice_admin.show_manage_dice_rewards(chat_id, None)
-        
-    except ValueError:
-        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
 
 # ===============================================================
 # نظام التذكير التلقائي
