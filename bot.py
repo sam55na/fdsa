@@ -715,22 +715,34 @@ class DatabaseManager:
                 self.connection.rollback()
 
     def execute_query(self, query, params=None):
+        """تحسين تنفيذ الاستعلامات مع معالجة الأخطاء"""
         try:
             if not self.connection or self.connection.closed:
                 self.reconnect()
-                if not self.connection:
-                    return False
-                    
+        
+            if not self.connection:
+                return False
+
             with self.connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(query, params or ())
-                if query.strip().upper().startswith('SELECT'):
+            
+                # التحقق من نوع الاستعلام بشكل آمن
+                query_upper = query.strip().upper()
+                if query_upper.startswith('SELECT'):
                     result = cursor.fetchall()
                     return result
+            
                 self.connection.commit()
                 return True
+            
         except psycopg2.InterfaceError:
             logger.warning("🔄 إعادة الاتصال بقاعدة البيانات...")
             self.reconnect()
+            return False
+        except IndexError as e:
+            logger.error(f"❌ خطأ في فهرسة النتائج: {str(e)}")
+            if self.connection:
+                self.connection.rollback()
             return False
         except Exception as e:
             logger.error(f"❌ خطأ في تنفيذ الاستعلام: {str(e)}")
@@ -794,53 +806,54 @@ class DiceGame:
         """التحقق إذا كان المستخدم يمكنه اللعب"""
         try:
             user_id_str = str(user_id)
-            
+
             # التحقق من آخر مرة لعب
             result = db_manager.execute_query(
                 "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
                 (user_id_str,)
-            )
-            
+        )
+
             if result and len(result) > 0:
                 last_play_date = result[0].get('last_play_date')
                 if last_play_date:
                     settings = self.get_game_settings()
                     cooldown_hours = settings['cooldown_hours']
-                    
+
                     time_passed = (datetime.now() - last_play_date).total_seconds()
                     if time_passed < cooldown_hours * 3600:
                         remaining_time = (cooldown_hours * 3600) - time_passed
                         hours = int(remaining_time // 3600)
                         minutes = int((remaining_time % 3600) // 60)
-                        return False, f"يمكنك اللعب مرة أخرى بعد {hours:02d}:{minutes:02d}"
-            
-            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة
+                        return False, f"⏳ يمكنك اللعب بعد {hours:02d}:{minutes:02d}"
+
+            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة - الإصلاح هنا
             payment_result = db_manager.execute_query(
                 "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
                 "AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 1",
                 (user_id_str,)
-            )
-            
+        )
+
+            # التحقق من وجود النتائج بشكل صحيح
             if not payment_result or len(payment_result) == 0:
-                return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
-            
-            # التحقق من صحة البيانات
-            if 'amount' not in payment_result[0] or payment_result[0]['amount'] is None:
-                return False, "خطأ في بيانات الدفع"
-            
+                return False, "❌ يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
+
+            # التحقق من صحة البيانات بشكل آمن
+            if len(payment_result) == 0 or 'amount' not in payment_result[0] or payment_result[0]['amount'] is None:
+                return False, "❌ خطأ في بيانات الدفع"
+
             # التحقق من الحد الأدنى للدفع
             settings = self.get_game_settings()
             last_payment = float(payment_result[0]['amount'])
             min_amount = settings['min_payment_amount']
-            
+
             if last_payment < min_amount:
-                return False, f"الحد الأدنى للدفع هو {min_amount} للعب"
-            
+                return False, f"❌ الحد الأدنى للدفع هو {min_amount:.2f}"
+
             return True, last_payment
-            
+
         except Exception as e:
             logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
-            return False, "حدث خطأ في النظام"
+            return False, "❌ حدث خطأ في النظام"
     
     def play_dice_game(self, user_id, last_payment_amount):
         """تشغيل لعبة النرد"""
@@ -909,26 +922,35 @@ class DiceGame:
         """تحديث إحصائيات اللعبة"""
         try:
             user_id_str = str(user_id)
-            
-            # تحديث أو إدراج الإحصائيات
-            db_manager.execute_query("""
-                INSERT INTO dice_game_stats (user_id, plays_count, total_winnings, last_play_date, updated_at)
-                VALUES (%s, 1, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id) DO UPDATE SET 
-                    plays_count = dice_game_stats.plays_count + 1,
-                    total_winnings = dice_game_stats.total_winnings + EXCLUDED.total_winnings,
-                    last_play_date = EXCLUDED.last_play_date,
-                    updated_at = EXCLUDED.updated_at
-            """, (user_id_str, float(prize_amount)))
-            
+
+            # تحديث أو إدراج الإحصائيات - الإصلاح هنا
+            query = """
+            INSERT INTO dice_game_stats (user_id, plays_count, total_winnings, last_play_date, updated_at)
+            VALUES (%s, 1, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                plays_count = dice_game_stats.plays_count + 1,
+                total_winnings = dice_game_stats.total_winnings + EXCLUDED.total_winnings,
+                last_play_date = EXCLUDED.last_play_date,
+                updated_at = EXCLUDED.updated_at
+        """
+            success = db_manager.execute_query(query, (user_id_str, float(prize_amount)))
+
+            if not success:
+                logger.error("❌ فشل في تحديث إحصائيات اللعبة")
+                return
+
             # إضافة إلى سجل اللعب
-            db_manager.execute_query("""
-                INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (user_id_str, int(dice_value), float(last_payment_amount), float(prize_rate), float(prize_amount)))
-            
+            insert_success = db_manager.execute_query(
+                "INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (user_id_str, int(dice_value), float(last_payment_amount), float(prize_rate), float(prize_amount))
+        )
+
+            if not insert_success:
+                logger.error("❌ فشل في إضافة سجل اللعب")
+
         except Exception as e:
-            logger.error(f"خطأ في تحديث إحصائيات اللعبة: {str(e)}")
+            logger.error(f"❌ خطأ في تحديث إحصائيات اللعبة: {str(e)}")
     
     def get_user_stats(self, user_id):
         """جلب إحصائيات المستخدم"""
