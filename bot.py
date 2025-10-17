@@ -5512,9 +5512,9 @@ def show_rewards_management(chat_id, message_id):
         for reward_id, reward in rewards.items():
             status = "✅ مفعل" if reward['active'] else "❌ معطل"
             text += f"<b>{reward['name']}</b>\n"
-            text += f"   التكلفة: {reward['points_cost']}♞\n"
+            text += f"<blockquote>   التكلفة: {reward['points_cost']}♞\n"
             text += f"   الخصم: {reward['discount_rate']}%\n"
-            text += f"   الحالة: {status}\n\n"
+            text += f"   الحالة: {status}\n\n</blockquote>"
     else:
         text += "لا توجد جوائز\n"
     
@@ -6522,8 +6522,8 @@ def show_loyalty_redeem(chat_id, message_id):
 """
     
     if settings.get('redemption_enabled') != 'true':
-        text += "\n❌ <b>التبديل غير متاح حالياً</b>\n\n"
-        text += "💡 ستتمكن من استبدال النقاط عند تفعيل التبديل من قبل الإدارة وسيتم إعلام جميع المستخدمين على البوت"
+        text += "\n ❌ <b>التبديل غير متاح حالياً</b>\n\n"
+        text += "💡 ستتمكن من استبدال النقاط عند تفعيل التبديل من قبل الإدارة وسيتم إعلام جميع المستخدمين على البوت                                    "
     else:
         min_points = int(settings.get('min_redemption_points', 100))
         if user_points < min_points:
