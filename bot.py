@@ -836,40 +836,42 @@ class DiceGame:
             result = db_manager.execute_query(
                 "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
                 (str(user_id),)
-            )
-            
-            if result and result[0]['last_play_date']:
+        )
+        
+            # التصحيح: التحقق من وجود النتائج بشكل صحيح
+            if result and len(result) > 0 and result[0]['last_play_date']:
                 last_play = result[0]['last_play_date']
                 settings = self.get_game_settings()
                 cooldown_hours = settings['cooldown_hours']
-                
+            
                 time_passed = (datetime.now() - last_play).total_seconds()
                 if time_passed < cooldown_hours * 3600:
                     remaining_time = (cooldown_hours * 3600) - time_passed
                     hours = int(remaining_time // 3600)
                     minutes = int((remaining_time % 3600) // 60)
                     return False, f"يمكنك اللعب مرة أخرى بعد {hours:02d}:{minutes:02d}"
-            
+        
             # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة
             result = db_manager.execute_query(
                 "SELECT amount FROM transactions WHERE user_id = %s AND type = 'deposit' "
                 "AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 1",
                 (str(user_id),)
-            )
-            
-            if not result:
+        )
+        
+            # التصحيح: التحقق من وجود النتائج
+            if not result or len(result) == 0:
                 return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
-            
+        
             # التحقق من الحد الأدنى للدفع
             settings = self.get_game_settings()
             last_payment = float(result[0]['amount'])
             min_amount = settings['min_payment_amount']
-            
+        
             if last_payment < min_amount:
                 return False, f"الحد الأدنى للدفع هو {min_amount} للعب"
-            
+        
             return True, last_payment
-            
+        
         except Exception as e:
             logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
             return False, "حدث خطأ في النظام"
@@ -951,14 +953,14 @@ class DiceGame:
                     total_winnings = dice_game_stats.total_winnings + EXCLUDED.total_winnings,
                     last_play_date = EXCLUDED.last_play_date,
                     updated_at = EXCLUDED.updated_at
-            """, (str(user_id), prize_amount))
-            
+            """, (str(user_id), float(prize_amount)))
+        
             # إضافة إلى سجل اللعب
             db_manager.execute_query("""
                 INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (str(user_id), dice_value, last_payment_amount, prize_rate, prize_amount))
-            
+            """, (str(user_id), int(dice_value), float(last_payment_amount), float(prize_rate), float(prize_amount)))
+        
         except Exception as e:
             logger.error(f"خطأ في تحديث إحصائيات اللعبة: {str(e)}")
     
@@ -968,35 +970,37 @@ class DiceGame:
             result = db_manager.execute_query(
                 "SELECT plays_count, total_winnings, last_play_date FROM dice_game_stats WHERE user_id = %s",
                 (str(user_id),)
-            )
-            
-            if result:
+        )
+        
+            # التصحيح: التحقق من وجود النتائج
+            if result and len(result) > 0:
                 return result[0]
             else:
-                return {'plays_count': 0, 'total_winnings': 0, 'last_play_date': None}
+                return {'plays_count': 0, 'total_winnings': 0.0, 'last_play_date': None}
         except Exception as e:
             logger.error(f"خطأ في جلب إحصائيات المستخدم: {str(e)}")
-            return {'plays_count': 0, 'total_winnings': 0, 'last_play_date': None}
-    
+            return {'plays_count': 0, 'total_winnings': 0.0, 'last_play_date': None}
+
     def get_user_cooldown(self, user_id):
         """جلب الوقت المتبقي حتى يمكن اللعب مرة أخرى"""
         try:
             result = db_manager.execute_query(
                 "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
                 (str(user_id),)
-            )
-            
-            if not result or not result[0]['last_play_date']:
+        )
+        
+            # التصحيح: التحقق من وجود النتائج والبيانات
+            if not result or len(result) == 0 or not result[0]['last_play_date']:
                 return 0
-            
+        
             last_play = result[0]['last_play_date']
             settings = self.get_game_settings()
             cooldown_hours = settings['cooldown_hours']
             time_passed = (datetime.now() - last_play).total_seconds()
             time_remaining = (cooldown_hours * 3600) - time_passed
-            
+        
             return max(0, time_remaining)
-            
+        
         except Exception as e:
             logger.error(f"خطأ في جلب وقت التبريد: {str(e)}")
             return 0
