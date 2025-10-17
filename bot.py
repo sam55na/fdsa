@@ -277,7 +277,7 @@ class DatabaseManager:
                     'pending_withdrawals', 'payment_requests', 'maintenance',
                     'loyalty_points', 'loyalty_points_history', 'loyalty_rewards',
                     'loyalty_redemptions', 'loyalty_settings',
-                    'compensation_requests', 'compensation_settings', 'first_deposit_tracking','support_requests','gift_transactions','gift_codes','gift_code_usage','dice_game_stats','dice_game_history'
+                    'compensation_requests', 'compensation_settings', 'first_deposit_tracking','support_requests','gift_transactions','gift_codes','gift_code_usage'
             ]
                 for table in tables_to_drop:
                     try:
@@ -656,32 +656,66 @@ class DatabaseManager:
                     amount_received DECIMAL(15, 2) NOT NULL
 )
 """)
-                # جدول إحصائيات لعبة النرد
+                
+                # جدول إعدادات لعبة النرد
                 cursor.execute("""
-                CREATE TABLE dice_game_stats (
-                    user_id TEXT NOT NULL,
-                    plays_count INTEGER DEFAULT 0,
-                    total_winnings DECIMAL(15, 2) DEFAULT 0,
-                    last_play_date TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id)
+                CREATE TABLE dice_game_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+                """)
+
+                # جدول جوائز النرد
+                cursor.execute("""
+                CREATE TABLE dice_rewards (
+                    dice_number INTEGER PRIMARY KEY,
+                    multiplier DECIMAL(5, 2) NOT NULL,
+                    description TEXT,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
 
-                # جدول سجل لعب النرد
+                # جدول سجل اللعبة
                 cursor.execute("""
                 CREATE TABLE dice_game_history (
-                    play_id SERIAL PRIMARY KEY,
+                    game_id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     dice_value INTEGER NOT NULL,
-                    last_payment_amount DECIMAL(15, 2) NOT NULL,
-                    prize_rate DECIMAL(5, 4) NOT NULL,
-                    prize_amount DECIMAL(15, 2) NOT NULL,
-                    play_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    bet_amount DECIMAL(15, 2) NOT NULL,
+                    win_amount DECIMAL(15, 2) NOT NULL,
+                    win_multiplier DECIMAL(5, 2) NOT NULL,
+                    played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """)
-                
+
+                # إدخال الإعدادات الافتراضية
+                cursor.execute("""
+                INSERT INTO dice_game_settings (setting_key, setting_value) VALUES 
+                ('min_payment_amount', '100'),
+                ('game_enabled', 'true'),
+                ('cooldown_hours', '24'),
+                ('max_plays_per_day', '1')
+                ON CONFLICT (setting_key) DO NOTHING
+""")
+
+                # إدخال جوائز افتراضية
+                default_rewards = [
+                    (1, 0.0, 'حظ أوفر في المرة القادمة'),
+                    (2, 0.5, 'فوز بنسبة 50%'),
+                    (3, 1.0, 'فوز كامل'),
+                    (4, 1.5, 'فوز بنسبة 150%'),
+                    (5, 2.0, 'فوز مضاعف'),
+                    (6, 3.0, 'جائزة كبرى')
+]
+
+                for reward in default_rewards:
+                    cursor.execute("""
+                    INSERT INTO dice_rewards (dice_number, multiplier, description) 
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (dice_number) DO NOTHING
+                    """, reward)
                 
                 
                 
@@ -715,45 +749,27 @@ class DatabaseManager:
                 self.connection.rollback()
 
     def execute_query(self, query, params=None):
-        """تنفيذ استعلام على قاعدة البيانات مع معالجة محسنة للأخطاء"""
         try:
             if not self.connection or self.connection.closed:
                 self.reconnect()
-            if not self.connection:
-                # إرجاع قيمة مناسبة حسب نوع الاستعلام
-                if query.strip().upper().startswith('SELECT'):
-                    return []
-                return False
-
+                if not self.connection:
+                    return False
+                    
             with self.connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(query, params or ())
-            
-                # معالجة استعلامات SELECT
                 if query.strip().upper().startswith('SELECT'):
                     result = cursor.fetchall()
-                    # تأكد من إرجاع قائمة فارغة بدلاً من None
-                    return result if result is not None else []
-            
-                # استعلامات INSERT/UPDATE/DELETE
+                    return result
                 self.connection.commit()
                 return True
-            
         except psycopg2.InterfaceError:
-            logger.warning("... إعادة الاتصال بقاعدة البيانات.")
+            logger.warning("🔄 إعادة الاتصال بقاعدة البيانات...")
             self.reconnect()
-            # إرجاع قيمة مناسبة حسب نوع الاستعلام
-            if query.strip().upper().startswith('SELECT'):
-                return []
             return False
-        
         except Exception as e:
-            logger.error(f"خطأ في تنفيذ الاستعلام: {str(e)}")
+            logger.error(f"❌ خطأ في تنفيذ الاستعلام: {str(e)}")
             if self.connection:
                 self.connection.rollback()
-        
-            # إرجاع قيمة مناسبة حسب نوع الاستعلام
-            if query.strip().upper().startswith('SELECT'):
-                return []
             return False
 
     def reconnect(self):
@@ -769,538 +785,558 @@ db_manager = DatabaseManager()
 
 
 
-# ===============================================================
-# نظام لعبة النرد
-# ===============================================================
-
-class DiceGame:
-    def __init__(self):
-        self.last_play_times = {}
-        self.default_settings = {
-            'min_payment_amount': 100.0,
-            'prizes': {1: 0.1, 2: 0.15, 3: 0.2, 4: 0.25, 5: 0.3, 6: 0.5},
-            'cooldown_hours': 24
-        }
+class DiceGameManager:
+    def __init__(self, db_manager, bot):
+        self.db_manager = db_manager
+        self.bot = bot
     
-    def get_game_settings(self):
+    def get_dice_settings(self):
         """جلب إعدادات لعبة النرد"""
-        try:
-            result = db_manager.execute_query(
-                "SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'dice_%'"
+        result = self.db_manager.execute_query("SELECT * FROM dice_game_settings")
+        settings = {}
+        if result:
+            for row in result:
+                settings[row['setting_key']] = row['setting_value']
+        
+        defaults = {
+            'min_payment_amount': '100',
+            'game_enabled': 'true', 
+            'cooldown_hours': '24',
+            'max_plays_per_day': '1'
+        }
+        
+        for key, value in defaults.items():
+            if key not in settings:
+                settings[key] = value
+        
+        return settings
+    
+    def save_dice_settings(self, settings):
+        """حفظ إعدادات لعبة النرد"""
+        for key, value in settings.items():
+            success = self.db_manager.execute_query(
+                "INSERT INTO dice_game_settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value",
+                (key, str(value))
             )
-            settings = self.default_settings.copy()
-            
-            if result and len(result) > 0:
-                for row in result:
-                    key = row['setting_key']
-                    value = row['setting_value']
-                    
-                    if key == 'dice_min_payment_amount':
-                        settings['min_payment_amount'] = float(value)
-                    elif key == 'dice_cooldown_hours':
-                        settings['cooldown_hours'] = int(value)
-                    elif key.startswith('dice_prize_'):
-                        dice_number = int(key.replace('dice_prize_', ''))
-                        settings['prizes'][dice_number] = float(value)
-            
-            return settings
-        except Exception as e:
-            logger.error(f"خطأ في جلب إعدادات لعبة النرد: {str(e)}")
-            return self.default_settings
+            if not success:
+                return False
+        return True
     
-    def can_user_play(self, user_id):
-        """التحقق إذا كان المستخدم يمكنه اللعب"""
+    def get_dice_rewards(self):
+        """جلب جوائز النرد"""
+        result = self.db_manager.execute_query(
+            "SELECT * FROM dice_rewards WHERE active = TRUE ORDER BY dice_number"
+        )
+        rewards = {}
+        if result:
+            for row in result:
+                rewards[row['dice_number']] = {
+                    'multiplier': float(row['multiplier']),
+                    'description': row['description']
+                }
+        return rewards
+    
+    def update_dice_reward(self, dice_number, multiplier, description=None):
+        """تحديث جائزة النرد"""
+        if description is None:
+            description = self.get_reward_description(multiplier)
+        
+        return self.db_manager.execute_query(
+            "INSERT INTO dice_rewards (dice_number, multiplier, description) VALUES (%s, %s, %s) "
+            "ON CONFLICT (dice_number) DO UPDATE SET multiplier = EXCLUDED.multiplier, "
+            "description = EXCLUDED.description",
+            (dice_number, multiplier, description)
+        )
+    
+    def get_reward_description(self, multiplier):
+        """توليد وصف الجائزة"""
+        if multiplier == 0:
+            return "حظ أوفر في المرة القادمة"
+        elif multiplier <= 0.5:
+            return f"فوز بنسبة {multiplier*100}%"
+        elif multiplier <= 1.0:
+            return "فوز كامل"
+        elif multiplier <= 2.0:
+            return f"فوز بنسبة {multiplier*100}%"
+        else:
+            return "جائزة كبرى"
+    
+    def can_user_play_dice(self, user_id):
+        """التحقق إذا كان المستخدم يمكنه لعب النرد"""
         try:
-            user_id_str = str(user_id)
-
-            # التحقق من آخر مرة لعب
-            result = db_manager.execute_query(
-                "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
-                (user_id_str)
-        )
-
-            if result and len(result) > 0:
-                last_play_date = result[0].get('last_play_date')
-                if last_play_date:
-                    settings = self.get_game_settings()
-                    cooldown_hours = settings['cooldown_hours']
-
-                    time_passed = (datetime.now() - last_play_date).total_seconds()
-                    if time_passed < cooldown_hours * 3600:
-                        remaining_time = (cooldown_hours * 3600) - time_passed
-                        hours = int(remaining_time // 3600)
-                        minutes = int((remaining_time % 3600) // 60)
-                        return False, f"متبقي {hours:02d}:{minutes:02d} ساعة أخرى للعب"
-
-            # التحقق من وجود عملية دفع ناجحة خلال 24 ساعة - الإصلاح هنا
-            payment_result = db_manager,execute_query(
-                'SELECT amount FROM transactions WHERE user_id = %s AND type = \'deposit\' '
-                'AND created_at >= NOW() - INTERVAL \'24 hours\' ORDER BY created_at DESC '
-            'LIMIT 1',
-                (user_id_str)
-        )
-
-            # تحقق شامل من جميع الحالات الفارغة
-            if not payment_result or len(payment_result) == 0:
-                return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
-
-            # تحقق إضافي من هيكل البيانات
-            try:
-                payment_data = payment_result[0]
-                if not payment_data or 'amount' not in payment_data or payment_data['amount'] is None:
-                    return False, "خطأ في بيانات الدفع"
+            settings = self.get_dice_settings()
             
-                # التحقق من الحد الأدنى للدفع
-                settings = self.get_game_settings()
-                last_payment = float(payment_data['amount'])
-                min_amount = settings['min_payment_amount']
-
-                if last_payment < min_amount:
-                    return False, f"الحد الأدنى للدفع هو {min_amount:.2f}"
-
-                return True, last_payment
-
-            except (IndexError, KeyError, TypeError, ValueError) as e:
-                logger.error(f"خطأ في معالجة بيانات الدفع: {str(e)}")
-                return False, "حدث خطأ في تحقق بيانات الدفع"
-
+            if settings.get('game_enabled', 'true') != 'true':
+                return False, "اللعبة غير مفعلة حالياً"
+            
+            # التحقق من عملية الدفع
+            payment_result = self.db_manager.execute_query("""
+                SELECT amount FROM transactions 
+                WHERE user_id = %s AND type = 'deposit' 
+                AND created_at >= NOW() - INTERVAL '24 hours'
+                ORDER BY created_at DESC LIMIT 1
+            """, (str(user_id),))
+            
+            if not payment_result:
+                return False, "يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة"
+            
+            last_payment = float(payment_result[0]['amount'])
+            min_payment = float(settings.get('min_payment_amount', 100))
+            
+            if last_payment < min_payment:
+                return False, f"يجب أن تكون آخر عملية دفع بقيمة {min_payment} على الأقل"
+            
+            # التحقق من الوقت بين المحاولات
+            cooldown = int(settings.get('cooldown_hours', 24))
+            last_play = self.db_manager.execute_query("""
+                SELECT played_at FROM dice_game_history 
+                WHERE user_id = %s ORDER BY played_at DESC LIMIT 1
+            """, (str(user_id),))
+            
+            if last_play:
+                last_play_time = last_play[0]['played_at']
+                if datetime.now() - last_play_time < timedelta(hours=cooldown):
+                    return False, f"يمكنك اللعب مرة أخرى بعد {cooldown} ساعة"
+            
+            # التحقق من الحد اليومي
+            max_plays = int(settings.get('max_plays_per_day', 1))
+            today_plays = self.db_manager.execute_query("""
+                SELECT COUNT(*) as play_count FROM dice_game_history 
+                WHERE user_id = %s AND played_at >= CURRENT_DATE
+            """, (str(user_id),))
+            
+            today_count = today_plays[0]['play_count'] if today_plays else 0
+            if today_count >= max_plays:
+                return False, f"لقد استنفذت عدد محاولاتك اليومية ({max_plays} محاولة)"
+            
+            return True, last_payment
+            
         except Exception as e:
-            logger.error(f"خطأ في التحقق من إمكانية اللعب: {str(e)}")
-            return False, "حدث خطأ في النظام"
+            logger.error(f"Error in can_user_play_dice: {str(e)}")
+            return False, "حدث خطأ في التحقق"
     
-    def play_dice_game(self, user_id, last_payment_amount):
+    def play_dice_game(self, user_id):
         """تشغيل لعبة النرد"""
         try:
-            # إرسال النرد
-            dice_message = bot.send_dice(user_id, emoji='🎲')
+            can_play, result = self.can_user_play_dice(user_id)
+            if not can_play:
+                return False, result
             
-            def process_dice_result():
-                time.sleep(3)
+            bet_amount = result
+            dice_value = random.randint(1, 6)
+            
+            rewards = self.get_dice_rewards()
+            reward = rewards.get(dice_value, {'multiplier': 0.0, 'description': 'لا توجد جائزة'})
+            
+            win_amount = bet_amount * reward['multiplier']
+            
+            if win_amount > 0:
+                from main import update_wallet_balance, add_transaction
+                update_wallet_balance(user_id, win_amount)
+                add_transaction({
+                    'user_id': str(user_id),
+                    'type': 'dice_win',
+                    'amount': win_amount,
+                    'description': f'فوز في لعبة النرد - الرقم: {dice_value}'
+                })
+            
+            game_id = f"dice_{int(time.time() * 1000)}"
+            success = self.db_manager.execute_query("""
+                INSERT INTO dice_game_history (game_id, user_id, dice_value, bet_amount, win_amount, win_multiplier)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (game_id, str(user_id), dice_value, bet_amount, win_amount, reward['multiplier']))
+            
+            if success:
+                return True, {
+                    'dice_value': dice_value,
+                    'bet_amount': bet_amount,
+                    'win_amount': win_amount,
+                    'multiplier': reward['multiplier'],
+                    'description': reward['description'],
+                    'game_id': game_id
+                }
+            else:
+                return False, "فشل في حفظ نتيجة اللعبة"
                 
-                try:
-                    dice_value = dice_message.dice.value
-                    
-                    if not 1 <= dice_value <= 6:
-                        bot.send_message(user_id, "❌ حدث خطأ في النرد")
-                        return
-                    
-                    settings = self.get_game_settings()
-                    prize_rate = settings['prizes'].get(dice_value, 0.1)
-                    prize_amount = last_payment_amount * prize_rate
-                    
-                    # إضافة الجائزة إلى المحفظة
-                    new_balance = update_wallet_balance(user_id, prize_amount)
-                    
-                    # تسجيل المعاملة
-                    add_transaction({
-                        'user_id': str(user_id),
-                        'type': 'dice_prize',
-                        'amount': prize_amount,
-                        'description': f'جائزة نرد - الرقم {dice_value}'
-                    })
-                    
-                    # تحديث إحصائيات اللعبة
-                    self.update_game_stats(user_id, prize_amount, dice_value, last_payment_amount, prize_rate)
-                    
-                    # إرسال النتيجة
-                    emojis = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-                    emoji = emojis[dice_value - 1]
-                    
-                    result_text = f"""
-🎲 <b>مبروك! فزت في لعبة النرد</b>
-
-• <b>الرقم الذي ظهر:</b> {dice_value} {emoji}
-• <b>قيمة آخر دفع:</b> {last_payment_amount:.2f}
-• <b>نسبة الجائزة:</b> {prize_rate*100}%
-• <b>مبلغ الجائزة:</b> {prize_amount:.2f}
-• <b>رصيدك الجديد:</b> {new_balance:.2f}
-
-🎉 <b>تهانينا على الفوز!</b>
-                    """
-                    
-                    bot.send_message(user_id, result_text, parse_mode="HTML")
-                    
-                except Exception as e:
-                    logger.error(f"خطأ في معالجة نتيجة النرد: {str(e)}")
-                    bot.send_message(user_id, "❌ حدث خطأ في معالجة النتيجة")
-            
-            threading.Thread(target=process_dice_result).start()
-            return True
-            
         except Exception as e:
-            logger.error(f"خطأ في تشغيل لعبة النرد: {str(e)}")
-            return False
+            logger.error(f"Error in play_dice_game: {str(e)}")
+            return False, "حدث خطأ أثناء اللعبة"
     
-    def update_game_stats(self, user_id, prize_amount, dice_value, last_payment_amount, prize_rate):
-        """تحديث إحصائيات اللعبة"""
-        try:
-            user_id_str = str(user_id)
-
-            # تحديث أو إدراج الإحصائيات
-            db_manager.execute_query(
-                """INSERT INTO dice_game_stats (user_id, plays_count, total_winnings, last_play_date, updated_at)
-                VALUES (%s, 1, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    plays_count = dice_game_stats.plays_count + 1,
-                    total_winnings = dice_game_stats.total_winnings + EXCLUDED.total_winnings,
-                    last_play_date = EXCLUDED.last_play_date,
-                    updated_at = EXCLUDED.updated_at""",
-                (user_id_str, float(prize_amount))
-        )
-
-            # إضافة إلى سجل اللعب
-            db_manager.execute_query(
-                """INSERT INTO dice_game_history (user_id, dice_value, last_payment_amount, prize_rate, prize_amount)
-            VALUES (%s, %s, %s, %s, %s)""",
-                (user_id_str, int(dice_value), float(last_payment_amount), float(prize_rate), float(prize_amount))
-        )
-
-        except Exception as e:
-            logger.error(f"خطأ في تحديث إحصائيات اللعبة: {str(e)}")
-    
-    def get_user_stats(self, user_id):
+    def get_user_dice_stats(self, user_id):
         """جلب إحصائيات المستخدم"""
         try:
-            result = db_manager.execute_query(
-                "SELECT plays_count, total_winnings, last_play_date FROM dice_game_stats WHERE user_id = %s",
-                (str(user_id))
-        )
-
-            # معالجة محسنة للنتيجة
-            if result and len(result) > 0:
-                stats = result[0]
-                return {
-                    'plays_count': stats.get('plays_count', 0) or 0,
-                    'total_winnings': float(stats.get('total_winnings', 0)) or 0.0,
-                    'last_play_date': stats.get('last_play_date')
+            stats_result = self.db_manager.execute_query("""
+                SELECT COUNT(*) as total_plays, COALESCE(SUM(win_amount), 0) as total_wins
+                FROM dice_game_history WHERE user_id = %s
+            """, (str(user_id),))
+            
+            last_plays = self.db_manager.execute_query("""
+                SELECT dice_value, win_amount, played_at 
+                FROM dice_game_history 
+                WHERE user_id = %s 
+                ORDER BY played_at DESC 
+                LIMIT 5
+            """, (str(user_id),))
+            
+            return {
+                'total_plays': stats_result[0]['total_plays'] if stats_result else 0,
+                'total_wins': float(stats_result[0]['total_wins']) if stats_result else 0,
+                'last_plays': last_plays if last_plays else []
             }
-            else:
-                return {'plays_count': 0, 'total_winnings': 0.0, 'last_play_date': None}
             
         except Exception as e:
-            logger.error(f"خطأ في جلب إحصائيات المستخدم: {str(e)}")
-            return {'plays_count': 0, 'total_winnings': 0.0, 'last_play_date': None}
+            logger.error(f"Error in get_user_dice_stats: {str(e)}")
+            return None
     
-    def get_user_cooldown(self, user_id):
-        """جلب الوقت المتبقي حتى يمكن اللعب مرة أخرى"""
+    def get_dice_game_stats(self):
+        """جلب إحصائيات عامة"""
         try:
-            result = db_manager.execute_query(
-                "SELECT last_play_date FROM dice_game_stats WHERE user_id = %s",
-                (str(user_id))
-        )
-
-            if not result or len(result) == 0:
-                return 0
-
-            last_play_date = result[0].get('last_play_date')
-            if not last_play_date:
-                return 0
-
-            settings = self.get_game_settings()
-            cooldown_hours = settings['cooldown_hours']
-            time_passed = (datetime.now() - last_play_date).total_seconds()
-            time_remaining = (cooldown_hours * 3600) - time_passed
-
-            return max(0, time_remaining)
-        
+            total_players = self.db_manager.execute_query("""
+                SELECT COUNT(DISTINCT user_id) as total_players FROM dice_game_history
+            """)
+            
+            total_games = self.db_manager.execute_query("""
+                SELECT COUNT(*) as total_games, COALESCE(SUM(win_amount), 0) as total_payouts
+                FROM dice_game_history
+            """)
+            
+            lucky_numbers = self.db_manager.execute_query("""
+                SELECT dice_value, COUNT(*) as frequency, AVG(win_multiplier) as avg_multiplier
+                FROM dice_game_history 
+                GROUP BY dice_value 
+                ORDER BY frequency DESC
+            """)
+            
+            return {
+                'total_players': total_players[0]['total_players'] if total_players else 0,
+                'total_games': total_games[0]['total_games'] if total_games else 0,
+                'total_payouts': float(total_games[0]['total_payouts']) if total_games else 0,
+                'lucky_numbers': lucky_numbers if lucky_numbers else []
+            }
+            
         except Exception as e:
-            logger.error(f"خطأ في جلب وقت التبريد: {str(e)}")
-            return 0
+            logger.error(f"Error in get_dice_game_stats: {str(e)}")
+            return None
 
-# إنشاء كائن لعبة النرد
-dice_game = DiceGame()
-def show_dice_admin_panel(chat_id, message_id):
-    """عرض لوحة إدارة لعبة النرد"""
-    if not is_admin(chat_id):
-        bot.answer_callback_query(
-            chat_id, "ليس لديك صلاحية الدخول", show_alert=True
-        )
-        return
-    
-    settings = dice_game.get_game_settings()
-    
-    text = f"""
-🎲 <b>إدارة لعبة النرد</b>
 
-<b>الإعدادات الحالية:</b>
-• <b>الحد الأدنى للدفع:</b> {settings['min_payment_amount']:.2f}
-• <b>وقت الانتظار:</b> {settings['cooldown_hours']} ساعة
 
-<b>الجوائز:</b>
-"""
-    for dice_num, prize_rate in sorted(settings['prizes'].items()):
-        text += f"• <b>الرقم {dice_num}:</b> {prize_rate*100}%\n"
+class DiceGameUI:
+    def __init__(self, dice_manager, bot):
+        self.dice_manager = dice_manager
+        self.bot = bot
     
-    text += "\n<b>اختر الإجراء المطلوب:</b>"
+    def show_dice_section(self, chat_id, message_id=None):
+        """عرض قسم لعبة النرد"""
+        try:
+            can_play, message = self.dice_manager.can_user_play_dice(chat_id)
+            settings = self.dice_manager.get_dice_settings()
+            rewards = self.dice_manager.get_dice_rewards()
+            
+            text = "🎲 <b>لعبة النرد</b>\n\n"
+            
+            if can_play:
+                text += "✅ <b>يمكنك اللعب الآن!</b>\n"
+                text += f"💎 آخر عملية دفع: <b>{message:.2f}</b>\n\n"
+            else:
+                text += f"❌ <b>لا يمكنك اللعب حالياً</b>\n{message}\n\n"
+            
+            text += "📊 <b>قواعد اللعبة:</b>\n"
+            text += f"• رهانك هو قيمة آخر عملية دفع\n"
+            text += f"• الحد الأدنى للدفع: <b>{settings.get('min_payment_amount')}</b>\n"
+            text += f"• المدة بين المحاولات: <b>{settings.get('cooldown_hours')} ساعة</b>\n"
+            text += f"• الحد اليومي: <b>{settings.get('max_plays_per_day')} محاولة</b>\n\n"
+            
+            text += "🎁 <b>جدول الجوائز:</b>\n"
+            for dice_num in sorted(rewards.keys()):
+                reward = rewards[dice_num]
+                emoji = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][dice_num-1]
+                text += f"{emoji} <b>رقم {dice_num}</b>: {reward['multiplier']*100}% - {reward['description']}\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            
+            if can_play:
+                markup.row(types.InlineKeyboardButton("🎲 رمي النرد", callback_data="play_dice"))
+            
+            markup.row(
+                types.InlineKeyboardButton("📊 إحصائياتي", callback_data="dice_stats"),
+                types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_section")
+            )
+            markup.row(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+            
+            if message_id:
+                self.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+            else:
+                self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in show_dice_section: {str(e)}")
     
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("📊 إحصائيات اللعبة", callback_data="dice_stats"),
-        types.InlineKeyboardButton("⚙️ تعديل الإعدادات", callback_data="dice_settings")
-    )
-    markup.row(
-        types.InlineKeyboardButton("🎯 تعديل الجوائز", callback_data="dice_prizes"),
-        types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_admin")
-    )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
-    
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-    except:
-        bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-
-def show_dice_settings(chat_id, message_id):
-    """عرض إعدادات لعبة النرد"""
-    if not is_admin(chat_id):
-        bot.answer_callback_query(
-            chat_id, "ليس لديك صلاحية الدخول", show_alert=True
-        )
-        return
-    
-    settings = dice_game.get_game_settings()
-    
-    text = f"""
-⚙️ <b>تعديل إعدادات لعبة النرد</b>
-
-<b>الإعدادات الحالية:</b>
-• <b>الحد الأدنى للدفع:</b> {settings['min_payment_amount']:.2f}
-• <b>وقت الانتظار:</b> {settings['cooldown_hours']} ساعة
-
-<b>اختر الإعداد الذي تريد تعديله:</b>
-"""
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("💰 الحد الأدنى للدفع", callback_data="edit_dice_min_amount"),
-        types.InlineKeyboardButton("⏰ وقت الانتظار", callback_data="edit_dice_cooldown")
-    )
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
-    
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-    except:
-        bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-
-def show_dice_prizes(chat_id, message_id):
-    """عرض وتعديل الجوائز"""
-    if not is_admin(chat_id):
-        bot.answer_callback_query(
-            chat_id, "ليس لديك صلاحية الدخول", show_alert=True
-        )
-        return
-    
-    settings = dice_game.get_game_settings()
-    
-    text = """
-🎯 <b>تعديل جوائز لعبة النرد</b>
-
-<b>الجوائز الحالية (نسبة من قيمة الدفع):</b>
-"""
-    for dice_num, prize_rate in sorted(settings['prizes'].items()):
-        text += f"• <b>الرقم {dice_num}:</b> {prize_rate*100}%\n"
-    
-    text += "\n<b>اختر الرقم الذي تريد تعديل جائزته:</b>"
-    
-    markup = types.InlineKeyboardMarkup()
-    buttons = []
-    for dice_num in range(1, 7):
-        buttons.append(types.InlineKeyboardButton(
-            f"🎲 {dice_num}", 
-            callback_data=f"edit_dice_prize_{dice_num}"
-        ))
-    
-    # ترتيب الأزرار في صفوف
-    for i in range(0, len(buttons), 3):
-        markup.row(*buttons[i:i+3])
-    
-    markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
-    
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-    except:
-        bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-
-def show_dice_section(chat_id, message_id):
-    """عرض قسم لعبة النرد"""
-    try:
-        can_play, message = dice_game.can_user_play(chat_id)
-        settings = dice_game.get_game_settings()
-        user_stats = dice_game.get_user_stats(chat_id)
-        
-        if can_play:
-            status = "✅ <b>يمكنك اللعب الآن!</b>"
-            last_payment = message
-            status += f"\n• <b>قيمة آخر دفع:</b> {last_payment:.2f}"
-        else:
-            status = f"❌ <b>{message}</b>"
-        
-        text = f"""
-🎲 <b>لعبة النرد</b>
-
-<b>قواعد اللعبة:</b>
-• يجب أن يكون لديك عملية دفع ناجحة خلال آخر 24 ساعة
-• الحد الأدنى للدفع: {settings['min_payment_amount']:.2f}
-• يمكنك اللعب مرة كل {settings['cooldown_hours']} ساعة
-• الجوائز عبارة عن نسبة من قيمة آخر عملية دفع
-
-<b>إحصائياتك:</b>
-• <b>عدد مرات اللعب:</b> {user_stats['plays_count']}
-• <b>إجمالي المكاسب:</b> {user_stats['total_winnings']:.2f}
-
-<b>حالتك الحالية:</b>
-{status}
-
-<b>اختر الإجراء:</b>
-"""
-        
-        markup = types.InlineKeyboardMarkup()
-        
-        if can_play:
-            markup.add(types.InlineKeyboardButton("🎲 رمي النرد", callback_data="play_dice"))
-        else:
-            cooldown_seconds = dice_game.get_user_cooldown(chat_id)
-            if cooldown_seconds > 0:
-                hours = int(cooldown_seconds // 3600)
-                minutes = int((cooldown_seconds % 3600) // 60)
-                markup.add(types.InlineKeyboardButton(
-                    f"⏳ يمكنك اللعب بعد {hours:02d}:{minutes:02d}", 
-                    callback_data="dice_cooldown"
-                ))
-        
-        markup.add(types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_section"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
+    def handle_dice_play(self, call):
+        """معالجة طلب لعب النرد"""
+        chat_id = str(call.message.chat.id)
         
         try:
-            bot.edit_message_text(
+            # إرسال النرد
+            dice_message = self.bot.send_dice(chat_id, emoji='🎲')
+            
+            def send_result_after_delay():
+                time.sleep(3)
+                try:
+                    dice_value = dice_message.dice.value
+                    success, result = self.dice_manager.play_dice_game(chat_id)
+                    
+                    if success:
+                        game_result = result
+                        emojis = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+                        emoji = emojis[dice_value - 1]
+                        
+                        result_text = f"🎲 <b>نتيجة اللعبة</b>\n\n"
+                        result_text += f"🎯 الرقم: <b>{dice_value}</b> {emoji}\n"
+                        result_text += f"💰 قيمة الرهان: <b>{game_result['bet_amount']:.2f}</b>\n"
+                        result_text += f"📈 مضاعف الفوز: <b>{game_result['multiplier']*100}%</b>\n"
+                        result_text += f"🎁 الجائزة: <b>{game_result['description']}</b>\n\n"
+                        
+                        if game_result['win_amount'] > 0:
+                            result_text += f"✅ <b>مبروك! فزت بمبلغ: {game_result['win_amount']:.2f}</b>\n"
+                            result_text += f"💳 تم إضافة المبلغ إلى محفظتك"
+                        else:
+                            result_text += "😔 <b>حظ أوفر في المرة القادمة</b>"
+                        
+                        self.bot.send_message(chat_id, result_text, parse_mode="HTML")
+                        self.show_dice_section(chat_id, call.message.message_id)
+                    else:
+                        self.bot.send_message(chat_id, f"❌ {result}", parse_mode="HTML")
+                        
+                except Exception as e:
+                    logger.error(f"Error in dice result: {str(e)}")
+                    self.bot.send_message(chat_id, "❌ حدث خطأ أثناء اللعبة")
+            
+            threading.Thread(target=send_result_after_delay).start()
+            self.bot.answer_callback_query(call.id, "جاري رمي النرد...")
+            
+        except Exception as e:
+            logger.error(f"Error in handle_dice_play: {str(e)}")
+            self.bot.answer_callback_query(call.id, "❌ حدث خطأ أثناء اللعبة")
+    
+    def show_user_dice_stats(self, chat_id, message_id):
+        """عرض إحصائيات المستخدم"""
+        try:
+            stats = self.dice_manager.get_user_dice_stats(chat_id)
+            
+            text = "📊 <b>إحصائياتك في لعبة النرد</b>\n\n"
+            
+            if stats:
+                text += f"🎯 عدد مرات اللعب: <b>{stats['total_plays']}</b>\n"
+                text += f"💰 إجمالي المكاسب: <b>{stats['total_wins']:.2f}</b>\n\n"
+                
+                if stats['last_plays']:
+                    text += "📈 <b>آخر 5 محاولات:</b>\n"
+                    for i, play in enumerate(stats['last_plays'], 1):
+                        emoji = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][play['dice_value']-1]
+                        text += f"{i}. {emoji} <b>رقم {play['dice_value']}</b> - "
+                        if play['win_amount'] > 0:
+                            text += f"🎁 <b>+{play['win_amount']:.2f}</b>"
+                        else:
+                            text += "😔 <b>لا فوز</b>"
+                        text += f" - {play['played_at'].strftime('%H:%M')}\n"
+                else:
+                    text += "📝 <b>لا توجد محاولات سابقة</b>\n"
+            else:
+                text += "📝 <b>لا توجد إحصائيات متاحة</b>\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(
+                types.InlineKeyboardButton("🎲 العودة للعبة", callback_data="dice_section"),
+                types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_stats")
+            )
+            
+            self.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 text=text,
                 parse_mode="HTML",
                 reply_markup=markup
             )
-        except:
-            bot.send_message(
+            
+        except Exception as e:
+            logger.error(f"Error in show_user_dice_stats: {str(e)}")
+
+
+from telebot import types
+
+class DiceGameAdmin:
+    def __init__(self, dice_manager, bot):
+        self.dice_manager = dice_manager
+        self.bot = bot
+    
+    def show_dice_admin_panel(self, chat_id, message_id):
+        """عرض لوحة إدارة لعبة النرد"""
+        from main import is_admin
+        if not is_admin(chat_id):
+            self.bot.answer_callback_query(chat_id, "ليس لديك صلاحية الدخول", show_alert=True)
+            return
+        
+        try:
+            settings = self.dice_manager.get_dice_settings()
+            rewards = self.dice_manager.get_dice_rewards()
+            stats = self.dice_manager.get_dice_game_stats()
+            
+            text = "🎲 <b>إدارة لعبة النرد</b>\n\n"
+            
+            text += "⚙️ <b>الإعدادات الحالية:</b>\n"
+            text += f"• تفعيل اللعبة: <b>{'✅ مفعل' if settings.get('game_enabled') == 'true' else '❌ معطل'}</b>\n"
+            text += f"• الحد الأدنى للدفع: <b>{settings.get('min_payment_amount')}</b>\n"
+            text += f"• المدة بين المحاولات: <b>{settings.get('cooldown_hours')} ساعة</b>\n"
+            text += f"• الحد اليومي: <b>{settings.get('max_plays_per_day')} محاولة</b>\n\n"
+            
+            if stats:
+                text += "📊 <b>الإحصائيات العامة:</b>\n"
+                text += f"• إجمالي اللاعبين: <b>{stats['total_players']}</b>\n"
+                text += f"• إجمالي المرات: <b>{stats['total_games']}</b>\n"
+                text += f"• إجمالي المكاسب: <b>{stats['total_payouts']:.2f}</b>\n\n"
+            
+            text += "🎁 <b>الجوائز الحالية:</b>\n"
+            for dice_num in sorted(rewards.keys()):
+                reward = rewards[dice_num]
+                text += f"• <b>رقم {dice_num}</b>: {reward['multiplier']*100}% - {reward['description']}\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(
+                types.InlineKeyboardButton("⚙️ تعديل الإعدادات", callback_data="edit_dice_settings"),
+                types.InlineKeyboardButton("🎁 إدارة الجوائز", callback_data="manage_dice_rewards")
+            )
+            markup.row(
+                types.InlineKeyboardButton("📊 إحصائيات مفصلة", callback_data="dice_detailed_stats"),
+                types.InlineKeyboardButton("🔄 تحديث", callback_data="dice_admin")
+            )
+            markup.row(types.InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel"))
+            
+            self.bot.edit_message_text(
                 chat_id=chat_id,
+                message_id=message_id,
                 text=text,
                 parse_mode="HTML",
                 reply_markup=markup
             )
-    except Exception as e:
-        logger.error(f"خطأ في عرض قسم النرد: {str(e)}")
-        bot.send_message(chat_id, "❌ حدث خطأ في تحميل اللعبة")
-
-def handle_play_dice(call):
-    """معالجة طلب لعب النرد"""
-    chat_id = call.message.chat.id
+            
+        except Exception as e:
+            logger.error(f"Error in show_dice_admin_panel: {str(e)}")
     
-    can_play, result = dice_game.can_user_play(chat_id)
-    
-    if can_play:
-        # result هنا هو قيمة آخر عملية دفع
-        bot.answer_callback_query(call.id, "جاري إعداد النرد...")
-        success = dice_game.play_dice_game(chat_id, result)
+    def show_edit_dice_settings(self, chat_id, message_id):
+        """عرض واجهة تعديل الإعدادات"""
+        from main import is_admin
+        if not is_admin(chat_id):
+            return
         
-        if not success:
-            bot.send_message(chat_id, "❌ حدث خطأ في تشغيل اللعبة")
-    else:
-        bot.answer_callback_query(
-            call.id, 
-            f"لا يمكنك اللعب الآن: {result}", 
-            show_alert=True
+        settings = self.dice_manager.get_dice_settings()
+        
+        text = "⚙️ <b>تعديل إعدادات لعبة النرد</b>\n\n"
+        text += f"• تفعيل اللعبة: <b>{'✅ مفعل' if settings.get('game_enabled') == 'true' else '❌ معطل'}</b>\n"
+        text += f"• الحد الأدنى للدفع: <b>{settings.get('min_payment_amount')}</b>\n"
+        text += f"• المدة بين المحاولات: <b>{settings.get('cooldown_hours')} ساعة</b>\n"
+        text += f"• الحد اليومي: <b>{settings.get('max_plays_per_day')} محاولة</b>\n\n"
+        text += "اختر الإعداد الذي تريد تعديله:"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("🔘 تفعيل/تعطيل", callback_data="toggle_dice_game"),
+            types.InlineKeyboardButton("💰 الحد الأدنى", callback_data="edit_min_payment")
+        )
+        markup.row(
+            types.InlineKeyboardButton("⏰ مدة الانتظار", callback_data="edit_cooldown"),
+            types.InlineKeyboardButton("🎯 الحد اليومي", callback_data="edit_max_plays")
+        )
+        markup.row(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+        
+        self.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    
+    def show_manage_dice_rewards(self, chat_id, message_id):
+        """عرض إدارة الجوائز"""
+        from main import is_admin
+        if not is_admin(chat_id):
+            return
+        
+        rewards = self.dice_manager.get_dice_rewards()
+        
+        text = "🎁 <b>إدارة جوائز النرد</b>\n\n"
+        text += "اضغط على أي رقم لتعديل نسبته:\n\n"
+        
+        for dice_num in sorted(rewards.keys()):
+            reward = rewards[dice_num]
+            emoji = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][dice_num-1]
+            text += f"{emoji} <b>رقم {dice_num}</b>: {reward['multiplier']*100}% - {reward['description']}\n"
+        
+        markup = types.InlineKeyboardMarkup()
+        
+        # أزرار الأرقام
+        row1 = []
+        row2 = []
+        for dice_num in range(1, 7):
+            button = types.InlineKeyboardButton(
+                f"{dice_num}️⃣", 
+                callback_data=f"edit_reward_{dice_num}"
+            )
+            if dice_num <= 3:
+                row1.append(button)
+            else:
+                row2.append(button)
+        
+        markup.row(*row1)
+        markup.row(*row2)
+        markup.row(types.InlineKeyboardButton("🔙 رجوع", callback_data="dice_admin"))
+        
+        self.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    
+    def start_edit_reward(self, chat_id, dice_number):
+        """بدء تعديل جائزة"""
+        from main import is_admin, user_data
+        if not is_admin(chat_id):
+            return
+        
+        rewards = self.dice_manager.get_dice_rewards()
+        current_reward = rewards.get(dice_number, {'multiplier': 0.0})
+        
+        user_data[chat_id] = {
+            'state': 'edit_dice_reward',
+            'dice_number': dice_number
+        }
+        
+        self.bot.send_message(
+            chat_id,
+            f"🎲 <b>تعديل جائزة الرقم {dice_number}</b>\n\n"
+            f"النسبة الحالية: <b>{current_reward['multiplier']*100}%</b>\n\n"
+            f"أرسل النسبة الجديدة (0 - 1000):\n"
+            f"<em>مثال: 50 ← لنسبة 50%</em>",
+            parse_mode="HTML"
         )
 
-def start_edit_dice_min_amount(chat_id):
-    """بدء تعديل الحد الأدنى للدفع"""
-    if not is_admin(chat_id):
-        return
-    
-    user_data[chat_id] = {'state': 'edit_dice_min_amount'}
-    settings = dice_game.get_game_settings()
-    current_min = settings['min_payment_amount']
-    
-    bot.send_message(
-        chat_id,
-        f"💰 <b>تعديل الحد الأدنى للدفع</b>\n\n"
-        f"القيمة الحالية: <b>{current_min:.2f}</b>\n\n"
-        f"أرسل القيمة الجديدة:",
-        parse_mode="HTML",
-        reply_markup=EnhancedKeyboard.create_back_button("dice_settings")
-    )
-
-def start_edit_dice_cooldown(chat_id):
-    """بدء تعديل وقت الانتظار"""
-    if not is_admin(chat_id):
-        return
-    
-    user_data[chat_id] = {'state': 'edit_dice_cooldown'}
-    settings = dice_game.get_game_settings()
-    current_cooldown = settings['cooldown_hours']
-    
-    bot.send_message(
-        chat_id,
-        f"⏰ <b>تعديل وقت الانتظار</b>\n\n"
-        f"القيمة الحالية: <b>{current_cooldown} ساعة</b>\n\n"
-        f"أرسل عدد الساعات الجديدة:",
-        parse_mode="HTML",
-        reply_markup=EnhancedKeyboard.create_back_button("dice_settings")
-    )
-
-def start_edit_dice_prize(chat_id, dice_number):
-    """بدء تعديل جائزة رقم معين"""
-    if not is_admin(chat_id):
-        return
-    
-    user_data[chat_id] = {
-        'state': 'edit_dice_prize',
-        'dice_number': dice_number
-    }
-    settings = dice_game.get_game_settings()
-    current_prize = settings['prizes'].get(dice_number, 0.1) * 100
-    
-    bot.send_message(
-        chat_id,
-        f"🎯 <b>تعديل جائزة الرقم {dice_number}</b>\n\n"
-        f"القيمة الحالية: <b>{current_prize}%</b>\n\n"
-        f"أرسل النسبة الجديدة (0-100):\n"
-        f"<em>مثال: 25 ← لنسبة 25%</em>",
-        parse_mode="HTML",
-        reply_markup=EnhancedKeyboard.create_back_button("dice_prizes")
-    )
-
-
+dice_manager = DiceGameManager(db_manager, bot)
+dice_ui = DiceGameUI(dice_manager, bot)
+dice_admin = DiceGameAdmin(dice_manager, bot)
 # ===============================================================
 # دوال المساعدة المحسنة مع الهيكل الجديد
 # ===============================================================
@@ -3404,27 +3440,6 @@ def handle_create_gift_code_uses(message):
         
     except ValueError:
         bot.send_message(chat_id, "❌ يرجى إدخال عدد صحيح")
-
-def safe_get_first_result(query_result, default_value=None):
-    """الحصول على أول نتيجة من استعلام بشكل آمن"""
-    try:
-        if not query_result or len(query_result) == 0:
-            return default_value
-        return query_result[0]
-    except (IndexError, TypeError):
-        return default_value
-
-def safe_get_value(data, key, default_value=None):
-    """الحصول على قيمة من قاموس بشكل آمن"""
-    try:
-        if not data or key not in data:
-            return default_value
-        return data[key]
-    except (KeyError, TypeError):
-        return default_value
-
-
-
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -4564,8 +4579,8 @@ class EnhancedKeyboard:
         
         markup.add(types.InlineKeyboardButton("🎁 إهداء الرصيد", callback_data="gift_balance"),
             types.InlineKeyboardButton("🎟 كود هدية", callback_data="gift_code"))
-        markup.add(types.InlineKeyboardButton("لعبة النرد 🎲", callback_data="dice_section"))
         
+        markup.add(types.InlineKeyboardButton("🎲 لعبة النرد", callback_data="dice_section"))
         
         
         markup.add(types.InlineKeyboardButton("📞 التواصل مع الدعم", callback_data="contact_support"))
@@ -4650,8 +4665,8 @@ class EnhancedKeyboard:
             types.InlineKeyboardButton("إنشاء كود هدية", callback_data="gift_code_admin"),
             types.InlineKeyboardButton("إدارة الأكواد", callback_data="gift_code_manage")
     )
+        markup.add(types.InlineKeyboardButton("🎲 إدارة النرد", callback_data="dice_admin"))
         
-        markup.row(types.InlineKeyboardButton("إدارة النرد", callback_data="dice_admin"))
         
         markup.add(types.
 InlineKeyboardButton("🔙 رجوع", callback_data="main_menu"))
@@ -5776,52 +5791,6 @@ def handle_callbacks(call):
 
         elif call.data == "withdraw_stats":
             show_withdraw_stats(chat_id, message_id)
-        
-        # معالجات لعبة النرد - أضف هذه في قسم المعالجات المناسب
-        elif call.data == "dice_section":
-            show_dice_section(chat_id, message_id)
-
-        elif call.data == "play_dice":
-            handle_play_dice(call)
-
-        elif call.data == "dice_admin":
-            if is_admin(chat_id):
-                show_dice_admin_panel(chat_id, message_id)
-            else:
-                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-
-        elif call.data == "dice_settings":
-            if is_admin(chat_id):
-                show_dice_settings(chat_id, message_id)
-            else:
-                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-
-        elif call.data == "dice_prizes":
-            if is_admin(chat_id):
-                show_dice_prizes(chat_id, message_id)
-            else:
-                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-
-        elif call.data == "edit_dice_min_amount":
-            if is_admin(chat_id):
-                start_edit_dice_min_amount(chat_id)
-            else:
-                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-
-        elif call.data == "edit_dice_cooldown":
-            if is_admin(chat_id):
-                start_edit_dice_cooldown(chat_id)
-            else:
-                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-
-        elif call.data.startswith("edit_dice_prize_"):
-            if is_admin(chat_id):
-                dice_number = int(call.data.replace("edit_dice_prize_", ""))
-                start_edit_dice_prize(chat_id, dice_number)
-            else:
-                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
-        
-        
         
         
     except Exception as e:
@@ -8988,80 +8957,62 @@ def handle_edit_gift_commission_input(message):
 def handle_edit_gift_min_amount_input(message):
     handle_edit_gift_min_amount(message)
 
-# معالجات تعديل إعدادات النرد
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_section")
+def handle_dice_section(call):
+    dice_ui.show_dice_section(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "play_dice")
+def handle_play_dice(call):
+    dice_ui.handle_dice_play(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_stats")
+def handle_dice_stats(call):
+    dice_ui.show_user_dice_stats(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "dice_admin")
+def handle_dice_admin(call):
+    dice_admin.show_dice_admin_panel(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_dice_settings")
+def handle_edit_dice_settings(call):
+    dice_admin.show_edit_dice_settings(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "manage_dice_rewards")
+def handle_manage_dice_rewards(call):
+    dice_admin.show_manage_dice_rewards(str(call.message.chat.id), call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_reward_"))
+def handle_edit_reward(call):
+    dice_number = int(call.data.replace("edit_reward_", ""))
+    dice_admin.start_edit_reward(str(call.message.chat.id), dice_number)
+
+# معالج تعديل الجوائز:
 @bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-    user_data[str(message.chat.id)].get('state') == 'edit_dice_min_amount')
-def handle_edit_dice_min_amount(message):
+                    user_data[str(message.chat.id)].get('state') == 'edit_dice_reward')
+def handle_edit_dice_reward(message):
     chat_id = str(message.chat.id)
     try:
-        min_amount = float(message.text.strip())
-        if min_amount < 1:
-            bot.send_message(chat_id, "يجب أن يكون المبلغ أكبر من 0")
+        multiplier_percent = float(message.text.strip())
+        if multiplier_percent < 0 or multiplier_percent > 1000:
+            bot.send_message(chat_id, "❌ النسبة يجب أن تكون بين 0 و 1000")
             return
-
-        settings = dice_game.get_game_settings()
-        settings['min_payment_amount'] = min_amount
-        if dice_game.save_game_settings(settings):
-            bot.send_message(chat_id, f"تم تحديث الحد الأدنى للدفع إلى {min_amount:.2f}")
-        else:
-            bot.send_message(chat_id, "فشل في تحديث الإعدادات")
-
-        if chat_id in user_data:
-            del user_data[chat_id]
-
-        show_dice_settings(chat_id, None)
-    except ValueError:
-        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
-
-@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-    user_data[str(message.chat.id)].get('state') == 'edit_dice_cooldown')
-def handle_edit_dice_cooldown(message):
-    chat_id = str(message.chat.id)
-    try:
-        cooldown = int(message.text.strip())
-        if cooldown < 1:
-            bot.send_message(chat_id, "يجب أن يكون العدد 1 على الأقل")
-            return
-
-        settings = dice_game.get_game_settings()
-        settings['cooldown_hours'] = cooldown
-        if dice_game.save_game_settings(settings):
-            bot.send_message(chat_id, f"تم تحديث وقت الانتظار إلى {cooldown} ساعة")
-        else:
-            bot.send_message(chat_id, "فشل في تحديث الإعدادات")
-
-        if chat_id in user_data:
-            del user_data[chat_id]
-
-        show_dice_settings(chat_id, None)
-    except ValueError:
-        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
-
-@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
-    user_data[str(message.chat.id)].get('state') == 'edit_dice_prize')
-def handle_edit_dice_prize(message):
-    chat_id = str(message.chat.id)
-    try:
-        prize_percent = float(message.text.strip())
-        if prize_percent < 0 or prize_percent > 100:
-            bot.send_message(chat_id, "يجب أن تكون النسبة بين 0 و 100")
-            return
-
-        prize_rate = prize_percent / 100
+        
+        multiplier = multiplier_percent / 100.0
         dice_number = user_data[chat_id]['dice_number']
-        settings = dice_game.get_game_settings()
-        settings['prizes'][dice_number] = prize_rate
-        if dice_game.save_game_settings(settings):
-            bot.send_message(chat_id, f"تم تحديث جائزة الرقم {dice_number} إلى {prize_percent}%")
+        
+        if dice_manager.update_dice_reward(dice_number, multiplier):
+            bot.send_message(chat_id, f"✅ تم تحديث جائزة الرقم {dice_number} إلى {multiplier_percent}%")
         else:
-            bot.send_message(chat_id, "فشل في تحديث الإعدادات")
-
-        if chat_id in user_data:
-            del user_data[chat_id]
-
-        show_dice_prizes(chat_id, None)
+            bot.send_message(chat_id, "❌ فشل في تحديث الجائزة")
+        
+        del user_data[chat_id]
+        dice_admin.show_manage_dice_rewards(chat_id, None)
+        
     except ValueError:
-        bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
 # ===============================================================
 # نظام التذكير التلقائي
 # ===============================================================
@@ -9119,7 +9070,6 @@ def start_system():
 
 if __name__ == "__main__":
     start_system()
-
 
 
 
