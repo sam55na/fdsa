@@ -5815,25 +5815,40 @@ def show_main_menu(chat_id, message_id):
 def show_account_section(chat_id, message_id):
     accounts = load_accounts()
     has_account = str(chat_id) in accounts
-    
+
     text = "<b>⚡ قسم حساب 55BETS</b>\n\n"
-    
+
     if has_account:
         account = accounts[str(chat_id)]
         player_id = account.get("playerId")
+        username = account.get('username', 'غير محدد')
+        password = account.get('password', 'غير محدد')
         account_balance = get_player_balance_via_agent(player_id) if player_id else 'غير متوفر'
         wallet_balance = get_wallet_balance(chat_id)
-        
-        text += f"""✅ لديك حساب نشط
 
-👤 <b>اسم المستخدم:</b> <code>{account.get('username', 'غير محدد')}</code>
-💰 <b>رصيد الحساب:</b> <code>{account_balance}</code>
-💳 <b>رصيد المحفظة:</b> <code>{wallet_balance}</code>
-
-اختر الإجراء المطلوب:"""
+        # اقتباس HTML بشكل أنيق مثل تيليجرام
+        text += (
+            "✅ <b>لديك حساب نشط</b>\n\n"
+            "<b>معلومات حسابك:</b>\n"
+            "<blockquote>"
+            "👤 <b>اسم المستخدم:</b> <code>{username}</code>\n"
+            "🔐 <b>كلمة المرور:</b> <code>{password}</code>\n"
+            "💰 <b>رصيد الحساب:</b> <code>{balance}</code>\n"
+            "💳 <b>رصيد المحفظة:</b> <code>{wallet}</code>"
+            "</blockquote>\n"
+            "📋 اختر الإجراء المطلوب:"
+        ).format(
+            username=username,
+            password=password,
+            balance=account_balance,
+            wallet=wallet_balance
+        )
     else:
-        text += "❌ ليس لديك حساب بعد\n\nأنشئ حسابك الآن للبدء:"
-    
+        text += (
+            "❌ <b>ليس لديك حساب بعد</b>\n\n"
+            "أنشئ حسابك الآن للبدء:"
+        )
+
     try:
         bot.edit_message_text(
             chat_id=chat_id,
@@ -5842,10 +5857,10 @@ def show_account_section(chat_id, message_id):
             parse_mode="HTML",
             reply_markup=EnhancedKeyboard.create_account_section(has_account)
         )
-    except:
+    except Exception:
         bot.send_message(
-            chat_id,
-            text,
+            chat_id=chat_id,
+            text=text,
             parse_mode="HTML",
             reply_markup=EnhancedKeyboard.create_account_section(has_account)
         )
