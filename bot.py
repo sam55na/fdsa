@@ -54,6 +54,11 @@ system_lock = Lock()
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 user_data = {}
 
+
+MIN_DEPOSIT_TO_ACCOUNT = 10000 
+MIN_WITHDRAW_FROM_ACCOUNT = 10000 
+MIN_WITHDRAW_FROM_BOT = 50000
+
 # ===============================================================
 # فئة الوسيط المحسنة (Agent)
 # ===============================================================
@@ -7501,6 +7506,16 @@ def handle_deposit_to_account_amount(message):
     
     try:
         amount = float(message.text.strip())
+        if amount < MIN_DEPOSIT_TO_ACCOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ <b>المبلغ أقل من الحد الأدنى للشحن</b>\n\n"
+                f"<b>المبلغ المدخل:</b> {amount:,.0f}\n"
+                f"<b>الحد الأدنى المطلوب:</b> {MIN_DEPOSIT_TO_ACCOUNT:,.0f}",
+                parse_mode="HTML"
+            )
+            return
+        
         wallet_balance = get_wallet_balance(chat_id)
         
         if wallet_balance < amount:
@@ -7566,6 +7581,18 @@ def handle_withdraw_from_account_amount(message):
     
     try:
         amount = float(message.text.strip())
+        
+        if amount < MIN_WITHDRAW_FROM_ACCOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ <b>المبلغ أقل من الحد الأدنى للسحب</b>\n\n"
+                f"<b>المبلغ المدخل:</b> {amount:,.0f}\n"
+                f"<b>الحد الأدنى المطلوب:</b> {MIN_WITHDRAW_FROM_ACCOUNT:,.0f}",
+                parse_mode="HTML"
+            )
+            return
+        
+        
         player_id = user_data[chat_id]['player_id']
         
         account_balance = get_player_balance_via_agent(player_id)
@@ -7820,6 +7847,17 @@ def handle_withdraw_amount(message):
     
     try:
         amount = float(message.text.strip())
+        
+        if amount < MIN_WITHDRAW_FROM_BOT:
+            bot.send_message(
+                chat_id,
+                f"❌ <b>المبلغ أقل من الحد الأدنى للسحب</b>\n\n"
+                f"<b>المبلغ المدخل:</b> {amount:,.0f}\n"
+                f"<b>الحد الأدنى المطلوب:</b> {MIN_WITHDRAW_FROM_BOT:,.0f}",
+                parse_mode="HTML"
+            )
+            return
+        
         method_id = user_data[chat_id]['withdraw_method']
         method = withdraw_system.methods.get(method_id)
         
