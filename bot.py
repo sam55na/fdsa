@@ -1139,8 +1139,6 @@ class DiceRewardSystem:
                 'total_eligible': 0, 'granted_count': 0
             }
 
-# استيراد نظام المكافأة
-from dice_reward_system import DiceRewardSystem
 
 # إنشاء كائن نظام المكافأة
 dice_reward = DiceRewardSystem(db_manager, bot)
