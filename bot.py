@@ -277,7 +277,7 @@ class DatabaseManager:
                     'pending_withdrawals', 'payment_requests', 'maintenance',
                     'loyalty_points', 'loyalty_points_history', 'loyalty_rewards',
                     'loyalty_redemptions', 'loyalty_settings',
-                    'compensation_requests', 'compensation_settings', 'first_deposit_tracking','support_requests','gift_transactions','gift_codes','gift_code_usage','dice_game_stats'
+                    'compensation_requests', 'compensation_settings', 'first_deposit_tracking','support_requests','gift_transactions','gift_codes','gift_code_usage','dice_game_stats','dice_game_history'
             ]
                 for table in tables_to_drop:
                     try:
