@@ -5826,12 +5826,13 @@ def start(message):
     
     # رسالة الترحيب المحدثة
     welcome_text = f"""
-<blockquote><b>👋🏻 مرحباً بك في 55BETS</b></blockquote>
+<blockquote><b>👋🏻 مرحباً {user_title} في نظام إدارة 55BETS</b></blockquote>
 
-<b>💼 رصيدك الحالي:</b> <code>{wallet_balance:.2f}</code>
+<b>💼 رصيد المحفظة:</b> <code>{wallet_balance:.2f}</code>
+<b>💎 نقاط الامتياز:</b> <code>{loyalty_points}</code>
 
-<b>💎 نقاط امتيازك:</b> <code>{loyalty_points}</code>
-    """
+
+"""
     
     accounts = load_accounts()
     has_account = str(chat_id) in accounts
@@ -7781,7 +7782,7 @@ def handle_payment_transaction_id(message):
     transaction_id = message.text.strip()
     
     # التحقق من أن النص يحتوي فقط على أحرف إنجليزية وأرقام
-    if not transaction_id.isalnum():
+    if not all(c.isalnum() and c.isascii() for c in transaction_id):
         bot.send_message(
             chat_id,
             "❌ رقم عملية غير صحيح"
@@ -10053,6 +10054,7 @@ def start_system():
 
 if __name__ == "__main__":
     start_system()
+
 
 
 
