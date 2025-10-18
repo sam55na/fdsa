@@ -7780,6 +7780,30 @@ def handle_payment_transaction_id(message):
     chat_id = str(message.chat.id)
     transaction_id = message.text.strip()
     
+    # التحقق من أن النص يحتوي فقط على أحرف إنجليزية وأرقام
+    if not transaction_id.isalnum():
+        bot.send_message(
+            chat_id,
+            "❌ رقم عملية غير صحيح"
+        )
+        return
+    
+    # التحقق من الطول (5-100 حرف)
+    if len(transaction_id) < 5:
+        bot.send_message(
+            chat_id,
+            "❌ رقم عملية غير صحيح"
+        )
+        return
+        
+    if len(transaction_id) > 100:
+        bot.send_message(
+            chat_id,
+            "❌ رقم عملية غير صحيح"
+        )
+        return
+    
+    # إذا اجتاز جميع التحققات، متابعة المعالجة
     user_data[chat_id]['transaction_id'] = transaction_id
     user_data[chat_id]['state'] = 'payment_amount'
     
@@ -10029,6 +10053,7 @@ def start_system():
 
 if __name__ == "__main__":
     start_system()
+
 
 
 
