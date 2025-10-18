@@ -736,6 +736,32 @@ class DatabaseManager:
 )
 """)
                 
+                # جدول إعدادات البونص الإضافي
+                cursor.execute("""
+                CREATE TABLE bonus_settings (
+                    bonus_key TEXT PRIMARY KEY,
+                    bonus_value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+
+                # جدول سجل البونص
+                cursor.execute("""
+                CREATE TABLE bonus_history (
+                    history_id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    payment_request_id TEXT NOT NULL,
+                    original_amount DECIMAL(15, 2) NOT NULL,
+                    bonus_amount DECIMAL(15, 2) NOT NULL,
+                    final_amount DECIMAL(15, 2) NOT NULL,
+                    bonus_rate DECIMAL(5, 2) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+                
+                
+                
+                
                 # إدخال الجوايز الافتراضية
                 default_rewards = [
                     (1, 'fixed', '50', 'جائزة ثابتة للرقم 1'),
@@ -4105,6 +4131,216 @@ def show_maintenance_settings(chat_id, message_id):
     
     bot.edit_message_text(chat_id=chat_id, message_id=message_id, 
                          text=text, parse_mode="HTML", reply_markup=markup)
+
+
+
+def load_bonus_settings():
+    """تحميل إعدادات البونص الإضافي"""
+    result = db_manager.execute_query('SELECT * FROM bonus_settings')
+    settings = {}
+    if result:
+        for row in result:
+            settings[row['bonus_key']] = row['bonus_value']
+    
+    # القيم الافتراضية
+    defaults = {
+        'bonus_enabled': 'false',
+        'bonus_rate': '0',
+        'bonus_for_all_methods': 'true',
+        'bonus_methods': '[]'
+    }
+    
+    for key, value in defaults.items():
+        if key not in settings:
+            settings[key] = value
+    
+    return settings
+
+def save_bonus_settings(settings):
+    """حفظ إعدادات البونص الإضافي"""
+    for key, value in settings.items():
+        success = db_manager.execute_query(
+            "INSERT INTO bonus_settings (bonus_key, bonus_value) VALUES (%s, %s) "
+            "ON CONFLICT (bonus_key) DO UPDATE SET bonus_value = EXCLUDED.bonus_value, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (key, str(value))
+        )
+        if not success:
+            return False
+    return True
+
+def add_bonus_history(user_id, payment_request_id, original_amount, bonus_amount, final_amount, bonus_rate):
+    """إضافة سجل البونص"""
+    return db_manager.execute_query(
+        "INSERT INTO bonus_history (user_id, payment_request_id, original_amount, "
+        "bonus_amount, final_amount, bonus_rate) VALUES (%s, %s, %s, %s, %s, %s)",
+        (str(user_id), payment_request_id, original_amount, bonus_amount, final_amount, bonus_rate)
+    )
+
+def get_bonus_history(user_id=None, limit=20):
+    """جلب سجل البونص"""
+    if user_id:
+        result = db_manager.execute_query(
+            "SELECT * FROM bonus_history WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            (str(user_id), limit)
+        )
+    else:
+        result = db_manager.execute_query(
+            "SELECT * FROM bonus_history ORDER BY created_at DESC LIMIT %s",
+            (limit,)
+        )
+    return result if result else []
+
+def calculate_bonus_amount(amount, method_id=None):
+    """حساب مبلغ البونص"""
+    settings = load_bonus_settings()
+    
+    if settings.get('bonus_enabled') != 'true':
+        return 0, amount
+    
+    bonus_rate = float(settings.get('bonus_rate', 0))
+    
+    # التحقق إذا كان البونص لجميع الطرق أو لطرق محددة
+    bonus_for_all = settings.get('bonus_for_all_methods', 'true') == 'true'
+    
+    if not bonus_for_all:
+        bonus_methods = json.loads(settings.get('bonus_methods', '[]'))
+        if method_id not in bonus_methods:
+            return 0, amount
+    
+    bonus_amount = amount * bonus_rate
+    final_amount = amount + bonus_amount
+    
+    return bonus_amount, final_amount
+
+def show_bonus_admin_panel(chat_id, message_id):
+    """عرض لوحة إدارة البونص"""
+    if not is_admin(chat_id):
+        bot.answer_callback_query(chat_id, "ليس لديك صلاحية الدخول", show_alert=True)
+        return
+    
+    settings = load_bonus_settings()
+    bonus_stats = get_bonus_stats()
+    
+    enabled = settings.get('bonus_enabled') == 'true'
+    bonus_rate = float(settings.get('bonus_rate', 0)) * 100
+    for_all_methods = settings.get('bonus_for_all_methods', 'true') == 'true'
+    
+    text = f"""
+<b>🎁 إدارة نظام البونص الإضافي</b>
+
+<b>الإعدادات الحالية:</b>
+• الحالة: <b>{'🟢 مفعل' if enabled else '🔴 معطل'}</b>
+• نسبة البونص: <b>{bonus_rate}%</b>
+• النطاق: <b>{'جميع طرق الدفع' if for_all_methods else 'طرق محددة'}</b>
+
+<b>الإحصائيات:</b>
+• إجمالي عمليات البونص: <b>{bonus_stats['total_bonuses']}</b>
+• إجمالي مبالغ البونص: <b>{bonus_stats['total_bonus_amount']:.2f}</b>
+• عمليات اليوم: <b>{bonus_stats['today_bonuses']}</b>
+"""
+
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🔄 تعطيل/تفعيل", callback_data="toggle_bonus_system"),
+        types.InlineKeyboardButton("📊 إحصائيات", callback_data="bonus_stats")
+    )
+    markup.row(
+        types.InlineKeyboardButton("⚙️ الإعدادات", callback_data="bonus_settings"),
+        types.InlineKeyboardButton("📋 السجل", callback_data="bonus_history_admin")
+    )
+    markup.add(types.InlineKeyboardButton("← رجوع", callback_data="admin_panel"))
+    
+    try:
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id, 
+                            text=text, parse_mode="HTML", reply_markup=markup)
+    except:
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+def show_bonus_settings(chat_id, message_id):
+    """عرض إعدادات البونص"""
+    settings = load_bonus_settings()
+    bonus_rate = float(settings.get('bonus_rate', 0)) * 100
+    for_all_methods = settings.get('bonus_for_all_methods', 'true') == 'true'
+    
+    text = f"""
+<b>⚙️ إعدادات البونص الإضافي</b>
+
+<b>الإعدادات الحالية:</b>
+• نسبة البونص: <b>{bonus_rate}%</b>
+• النطاق: <b>{'جميع طرق الدفع' if for_all_methods else 'طرق محددة'}</b>
+
+<b>اختر الإعداد لتعديله:</b>
+"""
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("📊 نسبة البونص", callback_data="edit_bonus_rate"),
+        types.InlineKeyboardButton("🌍 نطاق البونص", callback_data="edit_bonus_scope")
+    )
+    markup.add(types.InlineKeyboardButton("← رجوع", callback_data="bonus_admin"))
+    
+    bot.edit_message_text(chat_id=chat_id, message_id=message_id, 
+                         text=text, parse_mode="HTML", reply_markup=markup)
+
+def get_bonus_stats():
+    """جلب إحصائيات البونص"""
+    try:
+        # إجمالي البونص
+        total_result = db_manager.execute_query(
+            "SELECT COUNT(*) as total_count, COALESCE(SUM(bonus_amount), 0) as total_amount "
+            "FROM bonus_history"
+        )
+        
+        # بونص اليوم
+        today_result = db_manager.execute_query(
+            "SELECT COUNT(*) as today_count, COALESCE(SUM(bonus_amount), 0) as today_amount "
+            "FROM bonus_history WHERE created_at >= CURRENT_DATE"
+        )
+        
+        stats = {
+            'total_bonuses': total_result[0]['total_count'] if total_result else 0,
+            'total_bonus_amount': float(total_result[0]['total_amount']) if total_result else 0,
+            'today_bonuses': today_result[0]['today_count'] if today_result else 0,
+            'today_bonus_amount': float(today_result[0]['today_amount']) if today_result else 0
+        }
+        
+        return stats
+    except Exception as e:
+        logger.error(f"خطأ في جلب إحصائيات البونص: {str(e)}")
+        return {'total_bonuses': 0, 'total_bonus_amount': 0, 'today_bonuses': 0, 'today_bonus_amount': 0}
+
+@bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
+                   user_data[str(message.chat.id)].get('state') == 'edit_bonus_rate')
+def handle_edit_bonus_rate(message):
+    """معالجة تعديل نسبة البونص"""
+    chat_id = str(message.chat.id)
+    
+    try:
+        bonus_percent = float(message.text.strip())
+        
+        if bonus_percent < 0 or bonus_percent > 100:
+            bot.send_message(chat_id, "النسبة يجب أن تكون بين 0 و 100")
+            return
+        
+        bonus_rate = bonus_percent / 100
+        
+        settings = load_bonus_settings()
+        settings['bonus_rate'] = str(bonus_rate)
+        
+        if save_bonus_settings(settings):
+            bot.send_message(chat_id, f"✅ تم تحديث نسبة البونص إلى {bonus_percent}%")
+        else:
+            bot.send_message(chat_id, "❌ فشل في تحديث الإعدادات")
+        
+        # تنظيف البيانات والعودة
+        if chat_id in user_data:
+            del user_data[chat_id]
+        show_bonus_settings(chat_id, None)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
+
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
 # ===============================================================
@@ -5337,7 +5573,9 @@ class EnhancedKeyboard:
         types.InlineKeyboardButton("👤 رسالة لمستخدم", callback_data="admin_private_message")
     )
         
-        
+        markup.row(
+    types.InlineKeyboardButton("🎁 إدارة البونص", callback_data="bonus_admin")
+)
         markup.add(types.
 InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
@@ -6646,7 +6884,40 @@ def handle_callbacks(call):
                 bot.answer_callback_query(call.id, "❌ تم تعطيل وضع الصيانة")
                 show_maintenance_settings(chat_id, message_id)
         
-        
+        elif call.data == "bonus_admin":
+            if is_admin(chat_id):
+                show_bonus_admin_panel(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "bonus_settings":
+            if is_admin(chat_id):
+                show_bonus_settings(chat_id, message_id)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "toggle_bonus_system":
+            if is_admin(chat_id):
+                settings = load_bonus_settings()
+                current_status = settings.get('bonus_enabled', 'false')
+                new_status = 'true' if current_status == 'false' else 'false'
+                settings['bonus_enabled'] = new_status
+                if save_bonus_settings(settings):
+                    status_text = "مفعل" if new_status == 'true' else "معطل"
+                    bot.answer_callback_query(call.id, f"تم {status_text} نظام البونص")
+                    show_bonus_admin_panel(chat_id, message_id)
+                else:
+                    bot.answer_callback_query(call.id, "فشل في تحديث الإعدادات", show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+
+        elif call.data == "edit_bonus_rate":
+            if is_admin(chat_id):
+                user_data[chat_id] = {'state': 'edit_bonus_rate'}
+                bot.send_message(chat_id, 
+                        "أرسل نسبة البونص الجديدة (بدون %):\n\nمثال: 5 ← لـ 5%",
+                        parse_mode="HTML",
+                        reply_markup=EnhancedKeyboard.create_back_button("bonus_settings"))
         
         
     except Exception as e:
@@ -9180,7 +9451,7 @@ def handle_edit_payout_days(message):
         bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
 
 def handle_approve_payment(call, chat_id, message_id):
-    """معالجة الموافقة على طلب الدفع """
+    """معالجة الموافقة على طلب الدفع مع البونص الإضافي"""
     # ✅ التصحيح: التحقق من هوية المستخدم الذي ضغط الزر وليس الدردشة
     if not is_admin(str(call.from_user.id)):
         bot.answer_callback_query(call.id, text="❌ ليس لديك صلاحية الموافقة", show_alert=True)
@@ -9191,7 +9462,7 @@ def handle_approve_payment(call, chat_id, message_id):
         parts = call.data.split('_')
         if len(parts) >= 4:
             user_id = parts[2]
-            amount = float(parts[3])
+            original_amount = float(parts[3])
             transaction_id = '_'.join(parts[4:]) if len(parts) > 4 else "غير معروف"
             
             # التحقق من عدم معالجة الطلب مسبقاً
@@ -9199,11 +9470,18 @@ def handle_approve_payment(call, chat_id, message_id):
                 bot.answer_callback_query(call.id, "❌ تم معالجة هذا الطلب مسبقاً", show_alert=True)
                 return
             
-            # تحديث رصيد المحفظة
-            current_balance = get_wallet_balance(user_id)
-            new_balance = update_wallet_balance(user_id, amount)
+            # جلب بيانات الطلب الكاملة للحصول على method_id
+            request_data = get_payment_request_details(user_id, transaction_id)
+            method_id = request_data.get('method_id') if request_data else None
             
-            logger.info(f"💰 تحديث الرصيد: المستخدم {user_id}, المبلغ {amount}, الرصيد الجديد {new_balance}")
+            # حساب البونص الإضافي
+            bonus_amount, final_amount = calculate_bonus_amount(original_amount, method_id)
+            
+            # تحديث رصيد المحفظة بالمبلغ النهائي (بعد البونص)
+            current_balance = get_wallet_balance(user_id)
+            new_balance = update_wallet_balance(user_id, final_amount)
+            
+            logger.info(f"💰 تحديث الرصيد: المستخدم {user_id}, المبلغ الأصلي {original_amount}, البونص {bonus_amount}, الإجمالي {final_amount}, الرصيد الجديد {new_balance}")
             
             # تحديث حالة الطلب في قاعدة البيانات
             db_manager.execute_query(
@@ -9211,34 +9489,64 @@ def handle_approve_payment(call, chat_id, message_id):
                 (user_id, transaction_id)
             )
             
-            # إرسال إشعار للمستخدم
+            # تسجيل معاملة الدفع الأساسية
+            transaction_data = {
+                'user_id': user_id,
+                'type': 'deposit',
+                'amount': final_amount,
+                'description': f'إيداع - رقم العملية: {transaction_id}'
+            }
+            add_transaction(transaction_data)
+            
+            # تسجيل البونص إذا كان موجوداً
+            if bonus_amount > 0:
+                add_bonus_history(user_id, transaction_id, original_amount, bonus_amount, final_amount, 
+                                float(load_bonus_settings().get('bonus_rate', 0)))
+                
+                # إرسال إشعار البونص المنفصل للمستخدم
+                bonus_notification = f"""
+<b>مبروك! حصلت على بونص إضافي</b>
+
+💰 <b>المبلغ الأساسي:</b> {original_amount:.2f}
+🎁 <b>البونص الإضافي:</b> {bonus_amount:.2f}
+📊 <b>نسبة البونص:</b> {float(load_bonus_settings().get('bonus_rate', 0)) * 100}%
+
+✨ <b>تم إضافة المبلغ إلى محفظتك بنجاح!</b> 🎊
+"""
+                try:
+                    bot.send_message(user_id, bonus_notification, parse_mode="HTML")
+                except Exception as e:
+                    logger.error(f"❌ خطأ في إرسال إشعار البونص للمستخدم: {e}")
+            
+            # إرسال إشعار الدفع الأساسي للمستخدم
+            payment_notification = f"""
+✅ <b>تمت الموافقة على طلب الدفع</b>
+
+💰 <b>المبلغ المضاف:</b> {final_amount:.2f}
+💳 <b>رصيدك الحالي:</b> {new_balance:.2f}
+
+📝 <b>رقم العملية:</b> <code>{transaction_id}</code>
+"""
             try:
-                bot.send_message(
-                    user_id,
-                    f"""✅ <b>تمت الموافقة على طلب الدفع</b>
-
-💰 <b>المبلغ المضاف:</b> {amount}
-💳 <b>رصيدك الحالي:</b> {new_balance}
-
-📝 <b>رقم العملية:</b> <code>{transaction_id}</code>""",
-                    parse_mode="HTML"
-                )
+                bot.send_message(user_id, payment_notification, parse_mode="HTML")
             except Exception as e:
-                logger.error(f"❌ خطأ في إرسال إشعار للمستخدم: {e}")
+                logger.error(f"❌ خطأ في إرسال إشعار الدفع للمستخدم: {e}")
             
             # تحديث رسالة المجموعة
             success_text = f"""
 ✅ <b>تمت الموافقة على طلب الدفع</b>
 
 👤 <b>المستخدم:</b> <code>{user_id}</code>
-💰 <b>المبلغ:</b> {amount}
-💳 <b>الرصيد السابق:</b> {current_balance}
-💳 <b>الرصيد الجديد:</b> {new_balance}
+💰 <b>المبلغ الأصلي:</b> {original_amount:.2f}
+🎁 <b>البونص الإضافي:</b> {bonus_amount:.2f}
+💵 <b>المبلغ الإجمالي:</b> {final_amount:.2f}
+💳 <b>الرصيد السابق:</b> {current_balance:.2f}
+💳 <b>الرصيد الجديد:</b> {new_balance:.2f}
 ⏰ <b>وقت الموافقة:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
 🔢 <b>رقم العملية:</b> <code>{transaction_id}</code>
 
 🟢 <b>الحالة:</b> مكتمل
-            """
+"""
             
             # إزالة الأزرار من الرسالة
             edit_group_message(
@@ -9248,7 +9556,59 @@ def handle_approve_payment(call, chat_id, message_id):
                 reply_markup=None
             )
             
-            bot.answer_callback_query(call.id, "✅ تمت الموافقة على الطلب")
+            # إشعار الإدارة بالعملية الناجحة
+            admin_notification = f"""
+📊 <b>تقرير عملية دفع ناجحة</b>
+
+👤 <b>المستخدم:</b> <code>{user_id}</code>
+💰 <b>المبلغ الأصلي:</b> {original_amount:.2f}
+🎁 <b>البونص:</b> {bonus_amount:.2f}
+💵 <b>الإجمالي:</b> {final_amount:.2f}
+📊 <b>نسبة البونص:</b> {float(load_bonus_settings().get('bonus_rate', 0)) * 100}%
+⏰ <b>الوقت:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            try:
+                bot.send_message(ADMIN_CHAT_ID, admin_notification, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"❌ خطأ في إرسال إشعار للإدارة: {e}")
+            
+            # معالجة نظام الإحالات بعد الدفع الناجح
+            try:
+                referrer_id = get_referrer(user_id)
+                if referrer_id:
+                    settings = load_referral_settings()
+                    commission_rate = float(settings.get('commission_rate', 0.1))
+                    commission_amount = final_amount * commission_rate
+                    
+                    # إضافة للعمولات المعلقة
+                    update_referral_earning(referrer_id, commission_amount)
+                    
+                    # تسجيل في سجل العمولات
+                    log_referral_commission(referrer_id, user_id, 'deposit', final_amount, 0, commission_amount)
+                    
+                    logger.info(f"💰 إضافة عمولة إحالة: {commission_amount} للمحيل {referrer_id}")
+                    
+                    # إرسال إشعار للمحيل
+                    try:
+                        referral_notification = f"""
+👥 <b>إشعار إحالة جديدة</b>
+
+🎉 <b>لقد قام شخص بدفع جديد من خلال رابط إحالتك!</b>
+
+👤 <b>المستخدم:</b> <code>{user_id}</code>
+💰 <b>المبلغ:</b> {final_amount:.2f}
+🎁 <b>عمولتك:</b> {commission_amount:.2f}
+
+✨ <b>استمر في جلب المزيد من الأعضاء لزيادة أرباحك!</b>
+"""
+                        bot.send_message(referrer_id, referral_notification, parse_mode="HTML")
+                    except Exception as e:
+                        logger.error(f"❌ خطأ في إرسال إشعار الإحالة: {e}")
+                        
+            except Exception as e:
+                logger.error(f"❌ خطأ في معالجة نظام الإحالات: {e}")
+            
+            bot.answer_callback_query(call.id, "✅ تمت الموافقة على الطلب وإضافة البونص")
             
         else:
             bot.answer_callback_query(call.id, "❌ بيانات غير صحيحة", show_alert=True)
