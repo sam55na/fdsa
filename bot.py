@@ -9394,6 +9394,20 @@ def handle_approve_payment(call, chat_id, message_id):
             bot.answer_callback_query(call.id, "طلب الدفع غير موجود - المعرف فارغ", show_alert=True)
             return
         
+        # جلب بيانات طلب الدفع
+        result = db_manager.execute_query(
+            "SELECT * FROM payment_requests WHERE request_id = %s",
+            (request_id,)
+        )
+        
+        # ✅ الآن يمكننا استخدام result بعد تعريفه
+        logger.info(f"عدد النتائج من قاعدة البيانات: {len(result) if result else 0}")
+        
+        if not result or len(result) == 0:
+            logger.error(f"لم يتم العثور على طلب الدفع: {request_id}")
+            bot.answer_callback_query(call.id, "طلب الدفع غير موجود", show_alert=True)
+            return
+        
         request_data = result[0]
         user_id = request_data['user_id']
         amount = float(request_data['amount'])
@@ -9401,6 +9415,8 @@ def handle_approve_payment(call, chat_id, message_id):
         transaction_id = request_data['transaction_id']
         group_message_id = request_data['group_message_id']
         group_chat_id = request_data['group_chat_id']
+        
+        logger.info(f"بيانات الطلب: user_id={user_id}, amount={amount}, method_id={method_id}")
         
         # التحقق إذا كان الطلب تمت معالجته مسبقاً
         if request_data['status'] != 'pending':
@@ -9434,8 +9450,6 @@ def handle_approve_payment(call, chat_id, message_id):
 
 • مبلغ البونص: <b>{bonus_amount:.2f}</b>
 • الرصيد الإجمالي: <b>{new_balance:.2f}</b>
-
-
             """
             bot.send_message(user_id, bonus_notification, parse_mode="HTML")
         
@@ -9482,7 +9496,6 @@ def handle_approve_payment(call, chat_id, message_id):
 • الرصيد السابق: <b>{current_balance:.2f}</b>
 • الرصيد الجديد: <b>{new_balance:.2f}</b>
 • رقم العملية: <code>{transaction_id}</code>
-
         """
         bot.send_message(user_id, user_notification, parse_mode="HTML")
         
@@ -9491,7 +9504,6 @@ def handle_approve_payment(call, chat_id, message_id):
     except Exception as e:
         logger.error(f"خطأ في معالجة الموافقة على الدفع: {str(e)}")
         bot.answer_callback_query(call.id, "حدث خطأ في المعالجة", show_alert=True)
-
 
 def handle_reject_payment(call, chat_id, message_id):
     """معالجة رفض طلب الدفع"""
