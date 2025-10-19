@@ -9380,131 +9380,156 @@ def handle_edit_payout_days(message):
 
 def handle_approve_payment(call, chat_id, message_id):
     """معالجة الموافقة على طلب الدفع"""
+    # ✅ التصحيح: التحقق من هوية المستخدم الذي ضغط الزر وليس الدردشة
+    if not is_admin(str(call.from_user.id)):
+        bot.answer_callback_query(call.id, text="❌ ليس لديك صلاحية الموافقة", show_alert=True)
+        return
+    
     try:
-        # طريقتين لاستخراج request_id لتغطية جميع الاحتمالات
-        if "approve_payment_" in call.data:
-            request_id = call.data.replace("approve_payment_", "")
-        else:
-            request_id = call.data.replace("approve_payment", "")
+        # استخراج البيانات من callback_data بشكل صحيح
+        data = call.data.replace("approve_payment_", "")
+        parts = data.split('_')
         
-        logger.info(f"بيانات الاستدعاء: {call.data}, request_id: {request_id}")
-        
-        # إذا كان request_id فارغاً
-        if not request_id:
-            bot.answer_callback_query(call.id, "طلب الدفع غير موجود - المعرف فارغ", show_alert=True)
-            return
-        
-        # جلب بيانات طلب الدفع
-        result = db_manager.execute_query(
-            "SELECT * FROM payment_requests WHERE request_id = %s",
-            (request_id,)
-        )
-        
-        # ✅ الآن يمكننا استخدام result بعد تعريفه
-        logger.info(f"عدد النتائج من قاعدة البيانات: {len(result) if result else 0}")
-        
-        if not result or len(result) == 0:
-            logger.error(f"لم يتم العثور على طلب الدفع: {request_id}")
-            bot.answer_callback_query(call.id, "طلب الدفع غير موجود", show_alert=True)
-            return
-        
-        request_data = result[0]
-        user_id = request_data['user_id']
-        amount = float(request_data['amount'])
-        method_id = request_data['method_id']
-        transaction_id = request_data['transaction_id']
-        group_message_id = request_data['group_message_id']
-        group_chat_id = request_data['group_chat_id']
-        
-        logger.info(f"بيانات الطلب: user_id={user_id}, amount={amount}, method_id={method_id}")
-        
-        # التحقق إذا كان الطلب تمت معالجته مسبقاً
-        if request_data['status'] != 'pending':
-            bot.answer_callback_query(call.id, "تمت معالجة هذا الطلب مسبقاً", show_alert=True)
-            return
-        
-        # جلب بيانات طريقة الدفع
-        payment_methods = load_payment_methods()
-        method_info = payment_methods.get(method_id, {})
-        method_name = method_info.get('name', 'غير معروف')
-        
-        # حساب البونص الإضافي
-        bonus_settings = load_bonus_settings()
-        bonus_amount = 0
-        
-        if bonus_settings.get('bonus_enabled') == 'true':
-            bonus_rate = float(bonus_settings.get('bonus_rate', 0.05))
-            bonus_amount = amount * bonus_rate
-        
-        # إضافة المبلغ إلى محفظة المستخدم
-        current_balance = get_wallet_balance(user_id)
-        new_balance = update_wallet_balance(user_id, amount)
-        
-        # إضافة البونص إذا كان مفعلاً
-        if bonus_amount > 0:
-            new_balance = update_wallet_balance(user_id, bonus_amount)
+        if len(parts) >= 3:
+            user_id = parts[0]
+            amount = float(parts[1])
+            transaction_id = '_'.join(parts[2:]) if len(parts) > 2 else "غير معروف"
             
-            # إرسال إشعار البونص للمستخدم
-            bonus_notification = f"""
-🎁 <b> حصلت على بونص إضافي</b>
+            # التحقق من عدم معالجة الطلب مسبقاً
+            if is_payment_request_processed(user_id, transaction_id):
+                bot.answer_callback_query(call.id, "❌ تم معالجة هذا الطلب مسبقاً", show_alert=True)
+                return
+            
+            # ✅ تطبيق البونص إذا كان نشطاً
+            bonus_percent = get_user_bonus(user_id)
+            original_amount = amount
+            
+            if bonus_percent > 0:
+                # حساب المبلغ الأصلي قبل البونص
+                original_amount = amount / (1 + bonus_percent / 100)
+                bonus_amount = amount - original_amount
+                
+                logger.info(f"🎰 تطبيق البونص: {bonus_percent}% على عملية المستخدم {user_id}")
+            
+            # تحديث رصيد المحفظة
+            current_balance = get_wallet_balance(user_id)
+            new_balance = update_wallet_balance(user_id, amount)
+            
+            logger.info(f"💰 تحديث الرصيد: المستخدم {user_id}, المبلغ {amount}, الرصيد الجديد {new_balance}")
+            
+            # ✅ تحديث حالة الطلب في نظام الملفات (بدلاً من قاعدة البيانات)
+            requests = load_payment_requests()
+            request_updated = False
+            
+            for request_id, request in requests.items():
+                if (request['user_id'] == user_id and 
+                    request['transaction_id'] == transaction_id and 
+                    request['status'] == 'pending'):
+                    
+                    request['status'] = 'approved'
+                    request['approved_at'] = time.time()
+                    request['approved_by'] = str(call.from_user.id)
+                    if bonus_percent > 0:
+                        request['bonus_percent'] = bonus_percent
+                        request['bonus_amount'] = bonus_amount
+                        request['original_amount'] = original_amount
+                    
+                    request_updated = True
+                    break
+            
+            if request_updated:
+                save_payment_requests(requests)
+            
+            # ✅ معالجة عمولة الإحالة
+            referrer_id = get_referrer(user_id)
+            commission_added = 0
+            
+            if referrer_id:
+                settings = load_system_settings()
+                commission = amount * settings['referral_commission']
+                commission_added = commission
+                update_wallet_balance(referrer_id, commission)
+                
+                # تحديث إحصائيات الإحالة
+                stats = load_referral_stats()
+                if referrer_id in stats:
+                    stats[referrer_id]['total_commission'] += commission
+                    save_referral_stats(stats)
+                
+                # إرسال إشعار للمُحيل
+                try:
+                    bot.send_message(
+                        referrer_id,
+                        f"🎉 <b>عمولة إحالة جديدة!</b>\n\n"
+                        f"💰 <b>المبلغ المضاف:</b> {commission}\n"
+                        f"💳 <b>رصيدك الحالي:</b> {get_wallet_balance(referrer_id)}\n"
+                        f"👤 <b>من المستخدم:</b> {user_id}",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.error(f"❌ خطأ في إرسال إشعار العمولة: {e}")
+            
+            # ✅ إرسال إشعار للمستخدم مع معلومات البونص
+            try:
+                user_message = f"""✅ <b>تمت الموافقة على طلب الدفع</b>
 
-• مبلغ البونص: <b>{bonus_amount:.2f}</b>
-• الرصيد الإجمالي: <b>{new_balance:.2f}</b>
-            """
-            bot.send_message(user_id, bonus_notification, parse_mode="HTML")
-        
-        # تسجيل المعاملة
-        add_transaction({
-            'user_id': user_id,
-            'type': 'deposit',
-            'amount': amount,
-            'description': f'إيداع عبر {method_name} - {transaction_id}'
-        })
-        
-        # تحديث حالة طلب الدفع
-        success = db_manager.execute_query(
-            "UPDATE payment_requests SET status = 'approved', approved_at = CURRENT_TIMESTAMP WHERE request_id = %s",
-            (request_id,)
-        )
-        
-        if not success:
-            bot.answer_callback_query(call.id, "فشل في تحديث حالة الطلب", show_alert=True)
-            return
-        
-        # تعديل الرسالة في مجموعة الطلبات
-        if group_chat_id and group_message_id:
-            approved_text = f"""
+💰 <b>المبلغ المضاف:</b> {amount}"""
+                
+                if bonus_percent > 0:
+                    user_message += f"\n🎰 <b>البونص المطبق:</b> {bonus_percent}% (+{bonus_amount:.2f})"
+                    user_message += f"\n💵 <b>المبلغ الأصلي:</b> {original_amount:.2f}"
+                
+                user_message += f"""
+💳 <b>رصيدك الحالي:</b> {new_balance}
+
+📝 <b>رقم العملية:</b> <code>{transaction_id}</code>"""
+                
+                bot.send_message(user_id, user_message, parse_mode="HTML")
+                
+            except Exception as e:
+                logger.error(f"❌ خطأ في إرسال إشعار للمستخدم: {e}")
+            
+            # ✅ تحديث رسالة المجموعة مع معلومات البونص
+            success_text = f"""
 ✅ <b>تمت الموافقة على طلب الدفع</b>
 
-• المستخدم: <code>{user_id}</code>
-• المبلغ: <b>{amount:.2f}</b>
-• طريقة الدفع: <b>{method_name}</b>
-• رقم العملية: <code>{transaction_id}</code>
-• المعتمد: <code>{chat_id}</code>
-• الوقت: <b>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</b>
+👤 <b>المستخدم:</b> <code>{user_id}</code>
+💰 <b>المبلغ:</b> {amount}"""
+            
+            if bonus_percent > 0:
+                success_text += f"\n🎰 <b>البونص المطبق:</b> {bonus_percent}% (+{bonus_amount:.2f})"
+                success_text += f"\n💵 <b>المبلغ الأصلي:</b> {original_amount:.2f}"
+            
+            success_text += f"""
+💳 <b>الرصيد السابق:</b> {current_balance}
+💳 <b>الرصيد الجديد:</b> {new_balance}"""
+            
+            if commission_added > 0:
+                success_text += f"\n👥 <b>عمولة الإحالة:</b> {commission_added}"
+            
+            success_text += f"""
+⏰ <b>وقت الموافقة:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
+🔢 <b>رقم العملية:</b> <code>{transaction_id}</code>
 
-<b>تمت المعالجة بنجاح ✅</b>
+🟢 <b>الحالة:</b> مكتمل
             """
-            edit_group_message(group_chat_id, group_message_id, approved_text)
-        
-        # إرسال إشعار للمستخدم
-        user_notification = f"""
-✅ <b>تمت الموافقة على طلب الإيداع</b>
-
-• المبلغ: <b>{amount:.2f}</b>
-• طريقة الدفع: <b>{method_name}</b>
-• الرصيد السابق: <b>{current_balance:.2f}</b>
-• الرصيد الجديد: <b>{new_balance:.2f}</b>
-• رقم العملية: <code>{transaction_id}</code>
-        """
-        bot.send_message(user_id, user_notification, parse_mode="HTML")
-        
-        bot.answer_callback_query(call.id, "تمت الموافقة على الطلب بنجاح")
-        
+            
+            # إزالة الأزرار من الرسالة
+            edit_group_message(
+                call.message.chat.id,
+                call.message.message_id,
+                success_text,
+                reply_markup=None
+            )
+            
+            bot.answer_callback_query(call.id, "✅ تمت الموافقة على الطلب")
+            
+        else:
+            bot.answer_callback_query(call.id, "❌ بيانات غير صحيحة", show_alert=True)
+            
     except Exception as e:
-        logger.error(f"خطأ في معالجة الموافقة على الدفع: {str(e)}")
-        bot.answer_callback_query(call.id, "حدث خطأ في المعالجة", show_alert=True)
-
+        logger.error(f"❌ خطأ في معالجة الموافقة: {e}")
+        bot.answer_callback_query(call.id, "❌ حدث خطأ في المعالجة", show_alert=True)
 def handle_reject_payment(call, chat_id, message_id):
     """معالجة رفض طلب الدفع"""
     # ✅ التصحيح: التحقق من هوية المستخدم الذي ضغط الزر
