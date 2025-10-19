@@ -795,34 +795,7 @@ class DatabaseManager:
                         VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (reward_id) DO NOTHING
                     ''', reward)
-                logger.info("جاري إنشاء الفهارس لتحسين الأداء...")
-            
-                index_queries = [
-                    "-- فهارس الجداول الأساسية",
-                    "CREATE INDEX IF NOT EXISTS idx_wallets_chat_id ON wallets(chat_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);",
-                    "CREATE INDEX IF NOT EXISTS idx_payment_requests_user_id ON payment_requests(user_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_payment_requests_status ON payment_requests(status);",
-                    "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_user_id ON pending_withdrawals(user_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_status ON pending_withdrawals(status);",
-                    "CREATE INDEX IF NOT EXISTS idx_loyalty_points_user_id ON loyalty_points(user_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_gift_code_usage_user_id ON gift_code_usage(user_id);",
-                    "CREATE INDEX IF NOT EXISTS idx_gift_code_usage_used_at ON gift_code_usage(used_at);",
-                    "CREATE INDEX IF NOT EXISTS idx_gift_codes_code_active ON gift_codes(code, active);",
-                    "CREATE INDEX IF NOT EXISTS idx_gift_codes_expires_active ON gift_codes(expires_at, active);"
-            ]
 
-                for query in index_queries:
-                    if not query.startswith("--"):  # تخطي التعليقات
-                        try:
-                            cursor.execute(query)
-                        except Exception as e:
-                            logger.warning(f"خطأ في إنشاء الفهرس: {str(e)}")
-
-                logger.info("تم إنشاء الفهارس بنجاح")
                 self.connection.commit()
                 logger.info("✅ تم إنشاء جميع الجداول بنجاح بهيكل موحد ومصحح")
             
@@ -874,14 +847,13 @@ def get_wallet_balance(chat_id):
     """جلب رصيد محفظة المستخدم"""
     result = db_manager.execute_query(
         'SELECT balance FROM wallets WHERE chat_id = %s',
-        (str(chat_id),)  # إضافة فاصلة
+        (str(chat_id),)
     )
-    
     if result and len(result) > 0:
         balance = result[0]['balance']
         # تحويل decimal إلى float
         return float(balance) if balance is not None else 0.0
-
+    
     # إذا لم يكن للمستخدم محفظة، إنشاء واحدة برصيد 0
     db_manager.execute_query(
         'INSERT INTO wallets (chat_id, balance) VALUES (%s, 0) ON CONFLICT (chat_id) DO NOTHING',
@@ -920,7 +892,7 @@ def update_wallet_balance(chat_id, amount):
 
 def load_accounts():
     """تحميل جميع الحسابات"""
-    result = db_manager.execute_query('SELECT * FROM accounts LIMIT 1000')  # أضف LIMIT
+    result = db_manager.execute_query('SELECT * FROM accounts')
     accounts = {}
     if result:
         for row in result:
@@ -1466,9 +1438,8 @@ def get_loyalty_points(user_id):
     """جلب نقاط امتياز المستخدم"""
     result = db_manager.execute_query(
         'SELECT points FROM loyalty_points WHERE user_id = %s',
-        (str(user_id),)  # إضافة فاصلة
+        (str(user_id),)
     )
-    
     if result and len(result) > 0:
         return result[0]['points']
     
@@ -2766,73 +2737,73 @@ def can_user_use_gift_code_today(user_id):
         return False
 
 def use_gift_code(code, user_id):
-    """استخدام كود هدية - نسخة محسنة لمنع التنافس"""
+    """استخدام كود هدية"""
     try:
-        # التحقق من صلاحية الكود مع منع التنافس
-        code_result = db_manager.execute_query("""
-            SELECT gc.code, gc.amount, gc.max_uses, gc.used_count, gc.expires_at, gc.active
-            FROM gift_codes gc 
-            WHERE gc.code = %s AND gc.active = TRUE 
-            AND (gc.expires_at IS NULL OR gc.expires_at > NOW())
-            AND gc.used_count < gc.max_uses
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-        """, (code.upper(),))
-
-        if not code_result or len(code_result) == 0:
-            return False, "الكود غير صحيح أو منتهي الصلاحية أو تم استخدامه بالكامل"
-
-        code_info = code_result[0]
-
-        # التحقق إذا استخدم المستخدم هذا الكود من قبل
+        # التحقق إذا استخدم المستخدم أي كود خلال 24 ساعة
+        if not can_user_use_gift_code_today(user_id):
+            return False, "⚠️ يمكنك استخدام كود هدية واحدة فقط كل 24 ساعة"
+        
+        # التحقق من أن المستخدم لم يستخدم هذا الكود من قبل
         existing_usage = db_manager.execute_query(
             "SELECT 1 FROM gift_code_usage WHERE code = %s AND user_id = %s",
             (code.upper(), str(user_id))
         )
-
+        
         if existing_usage and len(existing_usage) > 0:
-            return False, "لقد استخدمت هذا الكود من قبل"
-
-        # التحقق إذا استخدم المستخدم أي كود خلال 24 ساعة
-        today_usage = db_manager.execute_query(
-            "SELECT 1 FROM gift_code_usage WHERE user_id = %s AND used_at >= NOW() - INTERVAL '24 hours'",
-            (str(user_id),)
+            return False, "❌ لقد استخدمت هذا الكود من قبل"
+        
+        # التحقق من صلاحية الكود
+        code_data = db_manager.execute_query(
+            """SELECT code, amount, max_uses, used_count, expires_at, active 
+               FROM gift_codes WHERE code = %s""",
+            (code.upper(),)
         )
-
-        if today_usage and len(today_usage) > 0:
-            return False, "يمكنك استخدام كود هدية واحدة فقط كل 24 ساعة"
-
-        # تحديث عداد الاستخدام
+        
+        if not code_data or len(code_data) == 0:
+            return False, "❌ الكود غير صحيح"
+        
+        code_info = code_data[0]
+        
+        if not code_info['active']:
+            return False, "❌ الكود غير فعال"
+        
+        if code_info['expires_at'] and code_info['expires_at'] < datetime.now():
+            return False, "❌ الكود منتهي الصلاحية"
+        
+        if code_info['used_count'] >= code_info['max_uses']:
+            return False, "❌ تم استخدام هذا الكود بالكامل"
+        
+        # استخدام الكود
         success = db_manager.execute_query(
             "UPDATE gift_codes SET used_count = used_count + 1 WHERE code = %s",
             (code.upper(),)
         )
-
-        if not success:
-            return False, "تم استخدام هذا الكود بالكامل"
-
-        # تسجيل استخدام الكود
-        db_manager.execute_query(
-            "INSERT INTO gift_code_usage (code, user_id, amount_received) VALUES (%s, %s, %s)",
-            (code.upper(), str(user_id), code_info['amount'])
-        )
-
-        # إضافة المبلغ للمحفظة
-        new_balance = update_wallet_balance(user_id, code_info['amount'])
-
-        # تسجيل المعاملة
-        add_transaction({
-            'user_id': str(user_id),
-            'type': 'gift_code',
-            'amount': code_info['amount'],
-            'description': f"هدية من كود: {code.upper()}"
-        })
-
-        return True, f"تمت إضافة {code_info['amount']} إلى رصيدك بنجاح"
-
+        
+        if success:
+            db_manager.execute_query(
+                """INSERT INTO gift_code_usage (code, user_id, amount_received) 
+                   VALUES (%s, %s, %s)""",
+                (code.upper(), str(user_id), code_info['amount'])
+            )
+            
+            # إضافة المبلغ للمحفظة
+            new_balance = update_wallet_balance(user_id, code_info['amount'])
+            
+            # تسجيل المعاملة
+            add_transaction({
+                'user_id': str(user_id),
+                'type': 'gift_code',
+                'amount': code_info['amount'],
+                'description': f"هدية من كود: {code.upper()}"
+            })
+            
+            return True, f"🎉 تمت إضافة {code_info['amount']} إلى رصيدك بنجاح!"
+        
+        return False, "❌ حدث خطأ أثناء معالجة الكود"
+        
     except Exception as e:
         logger.error(f"خطأ في استخدام كود الهدية: {str(e)}")
-        return False, "حدث خطأ أثناء معالجة الكود"
+        return False, "❌ حدث خطأ أثناء معالجة الكود"
 
 def create_gift_code(code, amount, max_uses, created_by, expires_hours=24):
     """إنشاء كود هدية جديد"""
@@ -4282,6 +4253,83 @@ def handle_edit_bonus_rate(message):
         
     except ValueError:
         bot.send_message(chat_id, "يرجى إدخال رقم صحيح")
+
+
+def get_user_bonus(user_id):
+    """الحصول على بونص المستخدم النشط"""
+    user_id = str(user_id)
+    active_bonuses = load_active_bonuses()
+    
+    user_bonus = active_bonuses.get(user_id)
+    if user_bonus and time.time() < user_bonus['expires_at']:
+        return user_bonus['bonus_percent']
+    
+    # حذف البونص المنتهي
+    if user_id in active_bonuses:
+        del active_bonuses[user_id]
+        save_active_bonuses(active_bonuses)
+    
+    return 0
+def apply_bonus_to_amount(amount, bonus_percent):
+    """تطبيق البونص على المبلغ"""
+    bonus_amount = amount * (bonus_percent / 100)
+    return amount + bonus_amount, bonus_amount
+
+def can_claim_bonus(user_id):
+    """التحقق إذا كان يمكن للمستخدم المطالبة بالبونص"""
+    user_id = str(user_id)
+    bonus_data = load_daily_bonus()
+    
+    if user_id not in bonus_data:
+        return True
+    
+    last_claim = bonus_data[user_id].get('last_claim', 0)
+    return time.time() - last_claim >= DAILY_BONUS_COOLDOWN
+
+def update_bonus_claim(user_id, bonus_percent):
+    """تحديث وقت المطالبة بالبونص"""
+    user_id = str(user_id)
+    bonus_data = load_daily_bonus()
+    
+    bonus_data[user_id] = {
+        'last_claim': time.time(),
+        'last_bonus': bonus_percent,
+        'claim_count': bonus_data.get(user_id, {}).get('claim_count', 0) + 1
+    }
+    
+    save_daily_bonus(bonus_data)
+
+def activate_user_bonus(user_id, bonus_percent):
+    """تفعيل البونص للمستخدم"""
+    user_id = str(user_id)
+    active_bonuses = load_active_bonuses()
+    
+    active_bonuses[user_id] = {
+        'bonus_percent': bonus_percent,
+        'activated_at': time.time(),
+        'expires_at': time.time() + DAILY_BONUS_COOLDOWN
+    }
+    
+    save_active_bonuses(active_bonuses)
+    return bonus_percent
+
+def load_daily_bonus():
+    """تحميل بيانات البونص اليومي"""
+    return load_json("daily_bonus.json") or {}
+
+def save_daily_bonus(data):
+    """حفظ بيانات البونص اليومي"""
+    return save_json("daily_bonus.json", data)
+
+def load_active_bonuses():
+    """تحميل البونصات النشطة"""
+    return load_json("active_bonuses.json") or {}
+
+def save_active_bonuses(data):
+    """حفظ البونصات النشطة"""
+    return save_json("active_bonuses.json", data)
+
+
 
 # ===============================================================
 # نظام سجل السحوبات - دوال مستقلة
@@ -9530,6 +9578,7 @@ def handle_approve_payment(call, chat_id, message_id):
     except Exception as e:
         logger.error(f"❌ خطأ في معالجة الموافقة: {e}")
         bot.answer_callback_query(call.id, "❌ حدث خطأ في المعالجة", show_alert=True)
+
 def handle_reject_payment(call, chat_id, message_id):
     """معالجة رفض طلب الدفع"""
     # ✅ التصحيح: التحقق من هوية المستخدم الذي ضغط الزر
