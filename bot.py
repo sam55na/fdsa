@@ -736,8 +736,6 @@ class DatabaseManager:
 )
 """)
                 
-                
-                # جدول إعدادات البونص الإضافي
                 cursor.execute("""
                 CREATE TABLE bonus_settings (
                     bonus_key TEXT PRIMARY KEY,
@@ -754,6 +752,7 @@ class DatabaseManager:
                     ('bonus_all_methods', 'true')
                 ON CONFLICT (bonus_key) DO NOTHING
 """)
+                
                 
                 
                 
@@ -796,7 +795,34 @@ class DatabaseManager:
                         VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (reward_id) DO NOTHING
                     ''', reward)
+                logger.info("جاري إنشاء الفهارس لتحسين الأداء...")
+            
+                index_queries = [
+                    "-- فهارس الجداول الأساسية",
+                    "CREATE INDEX IF NOT EXISTS idx_wallets_chat_id ON wallets(chat_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);",
+                    "CREATE INDEX IF NOT EXISTS idx_payment_requests_user_id ON payment_requests(user_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_payment_requests_status ON payment_requests(status);",
+                    "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_user_id ON pending_withdrawals(user_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_pending_withdrawals_status ON pending_withdrawals(status);",
+                    "CREATE INDEX IF NOT EXISTS idx_loyalty_points_user_id ON loyalty_points(user_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals(referred_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_gift_code_usage_user_id ON gift_code_usage(user_id);",
+                    "CREATE INDEX IF NOT EXISTS idx_gift_code_usage_used_at ON gift_code_usage(used_at);",
+                    "CREATE INDEX IF NOT EXISTS idx_gift_codes_code_active ON gift_codes(code, active);",
+                    "CREATE INDEX IF NOT EXISTS idx_gift_codes_expires_active ON gift_codes(expires_at, active);"
+            ]
 
+                for query in index_queries:
+                    if not query.startswith("--"):  # تخطي التعليقات
+                        try:
+                            cursor.execute(query)
+                        except Exception as e:
+                            logger.warning(f"خطأ في إنشاء الفهرس: {str(e)}")
+
+                logger.info("تم إنشاء الفهارس بنجاح")
                 self.connection.commit()
                 logger.info("✅ تم إنشاء جميع الجداول بنجاح بهيكل موحد ومصحح")
             
@@ -848,13 +874,14 @@ def get_wallet_balance(chat_id):
     """جلب رصيد محفظة المستخدم"""
     result = db_manager.execute_query(
         'SELECT balance FROM wallets WHERE chat_id = %s',
-        (str(chat_id),)
+        (str(chat_id),)  # إضافة فاصلة
     )
+    
     if result and len(result) > 0:
         balance = result[0]['balance']
         # تحويل decimal إلى float
         return float(balance) if balance is not None else 0.0
-    
+
     # إذا لم يكن للمستخدم محفظة، إنشاء واحدة برصيد 0
     db_manager.execute_query(
         'INSERT INTO wallets (chat_id, balance) VALUES (%s, 0) ON CONFLICT (chat_id) DO NOTHING',
@@ -893,7 +920,7 @@ def update_wallet_balance(chat_id, amount):
 
 def load_accounts():
     """تحميل جميع الحسابات"""
-    result = db_manager.execute_query('SELECT * FROM accounts')
+    result = db_manager.execute_query('SELECT * FROM accounts LIMIT 1000')  # أضف LIMIT
     accounts = {}
     if result:
         for row in result:
@@ -1439,8 +1466,9 @@ def get_loyalty_points(user_id):
     """جلب نقاط امتياز المستخدم"""
     result = db_manager.execute_query(
         'SELECT points FROM loyalty_points WHERE user_id = %s',
-        (str(user_id),)
+        (str(user_id),)  # إضافة فاصلة
     )
+    
     if result and len(result) > 0:
         return result[0]['points']
     
@@ -2738,73 +2766,73 @@ def can_user_use_gift_code_today(user_id):
         return False
 
 def use_gift_code(code, user_id):
-    """استخدام كود هدية"""
+    """استخدام كود هدية - نسخة محسنة لمنع التنافس"""
     try:
-        # التحقق إذا استخدم المستخدم أي كود خلال 24 ساعة
-        if not can_user_use_gift_code_today(user_id):
-            return False, "⚠️ يمكنك استخدام كود هدية واحدة فقط كل 24 ساعة"
-        
-        # التحقق من أن المستخدم لم يستخدم هذا الكود من قبل
+        # التحقق من صلاحية الكود مع منع التنافس
+        code_result = db_manager.execute_query("""
+            SELECT gc.code, gc.amount, gc.max_uses, gc.used_count, gc.expires_at, gc.active
+            FROM gift_codes gc 
+            WHERE gc.code = %s AND gc.active = TRUE 
+            AND (gc.expires_at IS NULL OR gc.expires_at > NOW())
+            AND gc.used_count < gc.max_uses
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        """, (code.upper(),))
+
+        if not code_result or len(code_result) == 0:
+            return False, "الكود غير صحيح أو منتهي الصلاحية أو تم استخدامه بالكامل"
+
+        code_info = code_result[0]
+
+        # التحقق إذا استخدم المستخدم هذا الكود من قبل
         existing_usage = db_manager.execute_query(
             "SELECT 1 FROM gift_code_usage WHERE code = %s AND user_id = %s",
             (code.upper(), str(user_id))
         )
-        
+
         if existing_usage and len(existing_usage) > 0:
-            return False, "❌ لقد استخدمت هذا الكود من قبل"
-        
-        # التحقق من صلاحية الكود
-        code_data = db_manager.execute_query(
-            """SELECT code, amount, max_uses, used_count, expires_at, active 
-               FROM gift_codes WHERE code = %s""",
-            (code.upper(),)
+            return False, "لقد استخدمت هذا الكود من قبل"
+
+        # التحقق إذا استخدم المستخدم أي كود خلال 24 ساعة
+        today_usage = db_manager.execute_query(
+            "SELECT 1 FROM gift_code_usage WHERE user_id = %s AND used_at >= NOW() - INTERVAL '24 hours'",
+            (str(user_id),)
         )
-        
-        if not code_data or len(code_data) == 0:
-            return False, "❌ الكود غير صحيح"
-        
-        code_info = code_data[0]
-        
-        if not code_info['active']:
-            return False, "❌ الكود غير فعال"
-        
-        if code_info['expires_at'] and code_info['expires_at'] < datetime.now():
-            return False, "❌ الكود منتهي الصلاحية"
-        
-        if code_info['used_count'] >= code_info['max_uses']:
-            return False, "❌ تم استخدام هذا الكود بالكامل"
-        
-        # استخدام الكود
+
+        if today_usage and len(today_usage) > 0:
+            return False, "يمكنك استخدام كود هدية واحدة فقط كل 24 ساعة"
+
+        # تحديث عداد الاستخدام
         success = db_manager.execute_query(
             "UPDATE gift_codes SET used_count = used_count + 1 WHERE code = %s",
             (code.upper(),)
         )
-        
-        if success:
-            db_manager.execute_query(
-                """INSERT INTO gift_code_usage (code, user_id, amount_received) 
-                   VALUES (%s, %s, %s)""",
-                (code.upper(), str(user_id), code_info['amount'])
-            )
-            
-            # إضافة المبلغ للمحفظة
-            new_balance = update_wallet_balance(user_id, code_info['amount'])
-            
-            # تسجيل المعاملة
-            add_transaction({
-                'user_id': str(user_id),
-                'type': 'gift_code',
-                'amount': code_info['amount'],
-                'description': f"هدية من كود: {code.upper()}"
-            })
-            
-            return True, f"🎉 تمت إضافة {code_info['amount']} إلى رصيدك بنجاح!"
-        
-        return False, "❌ حدث خطأ أثناء معالجة الكود"
-        
+
+        if not success:
+            return False, "تم استخدام هذا الكود بالكامل"
+
+        # تسجيل استخدام الكود
+        db_manager.execute_query(
+            "INSERT INTO gift_code_usage (code, user_id, amount_received) VALUES (%s, %s, %s)",
+            (code.upper(), str(user_id), code_info['amount'])
+        )
+
+        # إضافة المبلغ للمحفظة
+        new_balance = update_wallet_balance(user_id, code_info['amount'])
+
+        # تسجيل المعاملة
+        add_transaction({
+            'user_id': str(user_id),
+            'type': 'gift_code',
+            'amount': code_info['amount'],
+            'description': f"هدية من كود: {code.upper()}"
+        })
+
+        return True, f"تمت إضافة {code_info['amount']} إلى رصيدك بنجاح"
+
     except Exception as e:
         logger.error(f"خطأ في استخدام كود الهدية: {str(e)}")
-        return False, "❌ حدث خطأ أثناء معالجة الكود"
+        return False, "حدث خطأ أثناء معالجة الكود"
 
 def create_gift_code(code, amount, max_uses, created_by, expires_hours=24):
     """إنشاء كود هدية جديد"""
@@ -4127,7 +4155,6 @@ def show_maintenance_settings(chat_id, message_id):
     bot.edit_message_text(chat_id=chat_id, message_id=message_id, 
                          text=text, parse_mode="HTML", reply_markup=markup)
 
-
 def load_bonus_settings():
     """جلب إعدادات البونص"""
     result = db_manager.execute_query('SELECT * FROM bonus_settings')
@@ -4174,8 +4201,6 @@ def calculate_bonus_amount(amount, method_id=None):
         return amount * bonus_rate
     
     return 0
-
-
 def show_bonus_admin_panel(chat_id, message_id):
     """عرض لوحة إدارة البونص"""
     if not is_admin(chat_id):
@@ -4203,10 +4228,8 @@ def show_bonus_admin_panel(chat_id, message_id):
         types.InlineKeyboardButton("🔄 تفعيل/تعطيل", callback_data="toggle_bonus"),
         types.InlineKeyboardButton("📊 تعديل النسبة", callback_data="edit_bonus_rate")
     )
-    markup.row(
-        types.InlineKeyboardButton("🌍 تعديل النطاق", callback_data="edit_bonus_scope"),
-        types.InlineKeyboardButton("🔄 تحديث", callback_data="bonus_admin")
-    )
+    
+    
     markup.add(types.InlineKeyboardButton("← رجوع", callback_data="admin_panel"))
     
     try:
@@ -4229,7 +4252,6 @@ def toggle_bonus_system(chat_id, message_id):
         show_bonus_admin_panel(chat_id, message_id)
     else:
         bot.answer_callback_query(chat_id, "فشل في تحديث الإعدادات", show_alert=True)
-
 @bot.message_handler(func=lambda message: str(message.chat.id) in user_data and 
                    user_data[str(message.chat.id)].get('state') == 'edit_bonus_rate')
 def handle_edit_bonus_rate(message):
@@ -5492,10 +5514,10 @@ class EnhancedKeyboard:
         types.InlineKeyboardButton("📢 إرسال جماعي", callback_data="admin_broadcast"),
         types.InlineKeyboardButton("👤 رسالة لمستخدم", callback_data="admin_private_message")
     )
+        
         markup.row(
             types.InlineKeyboardButton("🎁 إدارة البونص", callback_data="bonus_admin")
 )
-        
         markup.add(types.
 InlineKeyboardButton("➞ رجوع", callback_data="main_menu"))
         return markup
@@ -6804,7 +6826,6 @@ def handle_callbacks(call):
                 bot.answer_callback_query(call.id, "❌ تم تعطيل وضع الصيانة")
                 show_maintenance_settings(chat_id, message_id)
         
-        
         elif call.data == "bonus_admin":
             if is_admin(chat_id):
                 show_bonus_admin_panel(chat_id, message_id)
@@ -6825,6 +6846,7 @@ def handle_callbacks(call):
                                 parse_mode="HTML")
             else:
                 bot.answer_callback_query(call.id, "ليس لديك صلاحية الدخول", show_alert=True)
+        
         
     except Exception as e:
         logger.error(f"❌ خطأ في المعالجة: {e}")
@@ -9357,109 +9379,118 @@ def handle_edit_payout_days(message):
         bot.send_message(chat_id, "❌ يرجى إدخال رقم صحيح")
 
 def handle_approve_payment(call, chat_id, message_id):
-    """معالجة الموافقة على طلب الدفع """
-    # ✅ التصحيح: التحقق من هوية المستخدم الذي ضغط الزر وليس الدردشة
-    if not is_admin(str(call.from_user.id)):
-        bot.answer_callback_query(call.id, text="❌ ليس لديك صلاحية الموافقة", show_alert=True)
-        return
-    
+    """معالجة الموافقة على طلب الدفع"""
     try:
-        # استخراج البيانات من callback_data
-        parts = call.data.split('_')
-        if len(parts) >= 4:
-            user_id = parts[2]
-            amount = float(parts[3])
-            transaction_id = '_'.join(parts[4:]) if len(parts) > 4 else "غير معروف"
+        # استخراج معرف الطلب من بيانات الاستدعاء
+        request_id = call.data.replace("approve_payment_", "")
+        
+        # جلب بيانات طلب الدفع
+        result = db_manager.execute_query(
+            "SELECT * FROM payment_requests WHERE request_id = %s",
+            (request_id,)
+        )
+        
+        if not result or len(result) == 0:
+            bot.answer_callback_query(call.id, "طلب الدفع غير موجود", show_alert=True)
+            return
+        
+        request_data = result[0]
+        user_id = request_data['user_id']
+        amount = float(request_data['amount'])
+        method_id = request_data['method_id']
+        transaction_id = request_data['transaction_id']
+        group_message_id = request_data['group_message_id']
+        group_chat_id = request_data['group_chat_id']
+        
+        # التحقق إذا كان الطلب تمت معالجته مسبقاً
+        if request_data['status'] != 'pending':
+            bot.answer_callback_query(call.id, "تمت معالجة هذا الطلب مسبقاً", show_alert=True)
+            return
+        
+        # جلب بيانات طريقة الدفع
+        payment_methods = load_payment_methods()
+        method_info = payment_methods.get(method_id, {})
+        method_name = method_info.get('name', 'غير معروف')
+        
+        # حساب البونص الإضافي
+        bonus_settings = load_bonus_settings()
+        bonus_amount = 0
+        
+        if bonus_settings.get('bonus_enabled') == 'true':
+            bonus_rate = float(bonus_settings.get('bonus_rate', 0.05))
+            bonus_amount = amount * bonus_rate
+        
+        # إضافة المبلغ إلى محفظة المستخدم
+        current_balance = get_wallet_balance(user_id)
+        new_balance = update_wallet_balance(user_id, amount)
+        
+        # إضافة البونص إذا كان مفعلاً
+        if bonus_amount > 0:
+            new_balance = update_wallet_balance(user_id, bonus_amount)
             
-            # التحقق من عدم معالجة الطلب مسبقاً
-            if is_payment_request_processed(user_id, transaction_id):
-                bot.answer_callback_query(call.id, "❌ تم معالجة هذا الطلب مسبقاً", show_alert=True)
-                return
-            
-            # حساب البونص الإضافي
-            bonus_settings = load_bonus_settings()
-            bonus_amount = 0
-            if bonus_settings.get('bonus_enabled') == 'true':
-                bonus_rate = float(bonus_settings.get('bonus_rate', 0.05))
-                bonus_amount = amount * bonus_rate
-            
-            # تحديث رصيد المحفظة (المبلغ الأساسي + البونص)
-            current_balance = get_wallet_balance(user_id)
-            total_amount = amount + bonus_amount
-            new_balance = update_wallet_balance(user_id, total_amount)
-            
-            logger.info(f"💰 تحديث الرصيد: المستخدم {user_id}, المبلغ {amount}, البونص {bonus_amount}, الرصيد الجديد {new_balance}")
-            
-            # تحديث حالة الطلب في قاعدة البيانات
-            db_manager.execute_query(
-                "UPDATE payment_requests SET status = 'approved', approved_at = CURRENT_TIMESTAMP WHERE user_id = %s AND transaction_id = %s AND status = 'pending'",
-                (user_id, transaction_id)
-            )
-            
-            # إرسال إشعار للمستخدم (الإيداع الأساسي)
-            try:
-                bot.send_message(
-                    user_id,
-                    f"""✅ <b>تمت الموافقة على طلب الدفع</b>
+            # إرسال إشعار البونص للمستخدم
+            bonus_notification = f"""
+🎁 <b> حصلت على بونص إضافي</b>
 
-💰 <b>المبلغ المضاف:</b> {amount}
-💳 <b>رصيدك الحالي:</b> {new_balance}
+• مبلغ البونص: <b>{bonus_amount:.2f}</b>
+• الرصيد الإجمالي: <b>{new_balance:.2f}</b>
 
-📝 <b>رقم العملية:</b> <code>{transaction_id}</code>""",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error(f"❌ خطأ في إرسال إشعار للمستخدم: {e}")
-            
-            # إرسال إشعار البونص منفصل إذا كان هناك بونص
-            if bonus_amount > 0:
-                try:
-                    bot.send_message(
-                        user_id,
-                        f"""🎁 <b>مفاجأة! حصلت على بونص إضافي</b>
 
-✨ <b>مبلغ البونص:</b> {bonus_amount:.2f}
-💰 <b>الإجمالي المضاف:</b> {total_amount:.2f}
-💳 <b>رصيدك الحالي:</b> {new_balance}
-
-🎊 <b>تهانينا على المكافأة!</b>""",
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.error(f"❌ خطأ في إرسال إشعار البونص: {e}")
-            
-            # تحديث رسالة المجموعة
-            success_text = f"""
+            """
+            bot.send_message(user_id, bonus_notification, parse_mode="HTML")
+        
+        # تسجيل المعاملة
+        add_transaction({
+            'user_id': user_id,
+            'type': 'deposit',
+            'amount': amount,
+            'description': f'إيداع عبر {method_name} - {transaction_id}'
+        })
+        
+        # تحديث حالة طلب الدفع
+        success = db_manager.execute_query(
+            "UPDATE payment_requests SET status = 'approved', approved_at = CURRENT_TIMESTAMP WHERE request_id = %s",
+            (request_id,)
+        )
+        
+        if not success:
+            bot.answer_callback_query(call.id, "فشل في تحديث حالة الطلب", show_alert=True)
+            return
+        
+        # تعديل الرسالة في مجموعة الطلبات
+        if group_chat_id and group_message_id:
+            approved_text = f"""
 ✅ <b>تمت الموافقة على طلب الدفع</b>
 
-👤 <b>المستخدم:</b> <code>{user_id}</code>
-💰 <b>المبلغ الأساسي:</b> {amount}
-🎁 <b>البونص الإضافي:</b> {bonus_amount:.2f}
-💰 <b>الإجمالي:</b> {total_amount:.2f}
-💳 <b>الرصيد السابق:</b> {current_balance}
-💳 <b>الرصيد الجديد:</b> {new_balance}
-⏰ <b>وقت الموافقة:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}
-🔢 <b>رقم العملية:</b> <code>{transaction_id}</code>
+• المستخدم: <code>{user_id}</code>
+• المبلغ: <b>{amount:.2f}</b>
+• طريقة الدفع: <b>{method_name}</b>
+• رقم العملية: <code>{transaction_id}</code>
+• المعتمد: <code>{chat_id}</code>
+• الوقت: <b>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</b>
 
-🟢 <b>الحالة:</b> مكتمل
+<b>تمت المعالجة بنجاح ✅</b>
             """
-            
-            # إزالة الأزرار من الرسالة
-            edit_group_message(
-                call.message.chat.id,
-                call.message.message_id,
-                success_text,
-                reply_markup=None
-            )
-            
-            bot.answer_callback_query(call.id, "✅ تمت الموافقة على الطلب")
-            
-        else:
-            bot.answer_callback_query(call.id, "❌ بيانات غير صحيحة", show_alert=True)
-            
+            edit_group_message(group_chat_id, group_message_id, approved_text)
+        
+        # إرسال إشعار للمستخدم
+        user_notification = f"""
+✅ <b>تمت الموافقة على طلب الإيداع</b>
+
+• المبلغ: <b>{amount:.2f}</b>
+• طريقة الدفع: <b>{method_name}</b>
+• الرصيد السابق: <b>{current_balance:.2f}</b>
+• الرصيد الجديد: <b>{new_balance:.2f}</b>
+• رقم العملية: <code>{transaction_id}</code>
+
+        """
+        bot.send_message(user_id, user_notification, parse_mode="HTML")
+        
+        bot.answer_callback_query(call.id, "تمت الموافقة على الطلب بنجاح")
+        
     except Exception as e:
-        logger.error(f"❌ خطأ في معالجة الموافقة: {e}")
-        bot.answer_callback_query(call.id, "❌ حدث خطأ في المعالجة", show_alert=True)
+        logger.error(f"خطأ في معالجة الموافقة على الدفع: {str(e)}")
+        bot.answer_callback_query(call.id, "حدث خطأ في المعالجة", show_alert=True)
 
 
 def handle_reject_payment(call, chat_id, message_id):
@@ -10258,6 +10289,7 @@ def start_system():
 
 if __name__ == "__main__":
     start_system()
+
 
 
 
